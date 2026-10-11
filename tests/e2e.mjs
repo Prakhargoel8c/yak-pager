@@ -352,6 +352,83 @@ ok(
   `above=${splitJust.aboveGap} below=${splitJust.belowGap}`
 )
 
+console.log("— regression: an edit that strands a widget at a paragraph's end")
+// The bug this guards against: deleting everything after a widget inside a
+// straddling paragraph leaves the widget's float anchored at the
+// paragraph's end with no line of text below it, so the float overhangs the
+// paragraph's rect. measureBlock used to subtract the widget's box from a
+// rect that never contained it, measuring the paragraph roughly 216px
+// shorter than it is (a negative number for a short one). The solve then
+// pulled later blocks up across page boundaries, and the layout stayed
+// wrong until the re-run button forced a full re-measure. The fix: only
+// widget rects contained in the block's rect are subtracted.
+const stranded = await page.evaluate(() => {
+  const { view, key } = window.__pager
+  const s = key.getState(view.state)
+  let idx = -1
+  s.breaks.forEach((b, i) => {
+    if (idx < 0 && view.state.doc.resolve(b.pos).parent.type.name === "paragraph") idx = i
+  })
+  if (idx < 0) return { error: "no in-paragraph break" }
+  const b = s.breaks[idx]
+  const $p = view.state.doc.resolve(b.pos)
+  view.dispatch(view.state.tr.delete(b.pos, $p.end()))
+  // The state the debounced pass will measure: the widget now overhangs
+  // the paragraph's rect — the pre-condition of the bug.
+  const w = view.dom.querySelector(`.page-gap[data-page="${idx}"]`)
+  const p = w && w.closest("p")
+  if (!w || !p) return { error: "widget not inside a paragraph after the delete" }
+  const wr = w.getBoundingClientRect()
+  const pr = p.getBoundingClientRect()
+  return { overhang: wr.bottom > pr.bottom + 1 }
+})
+ok(stranded.error == null, "deleted the fragment after an in-paragraph break", JSON.stringify(stranded))
+ok(
+  stranded.overhang === true,
+  "the widget's float overhangs the paragraph's rect (the poison state)"
+)
+await sleep(900) // debounced pass measures the overhanging-widget state
+const strandedPass = await page.evaluate(() =>
+  window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
+)
+await page.evaluate(() => [...document.querySelectorAll(".panel-buttons button")][0].click())
+await sleep(800)
+const strandedRerun = await page.evaluate(() =>
+  window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
+)
+ok(
+  JSON.stringify(strandedPass) === JSON.stringify(strandedRerun),
+  "debounced pass on the stranded-widget state agrees with a full re-run",
+  `pass=${JSON.stringify(strandedPass)} rerun=${JSON.stringify(strandedRerun)}`
+)
+// And the geometry stays pixel-exact: every widget still ends exactly at the
+// next page's content start (the same arithmetic as the landing checks).
+const strandedLanding = await page.evaluate(() => {
+  const { view, key } = window.__pager
+  const pmTop = view.dom.getBoundingClientRect().top
+  return (key.getState(view.state)?.breaks ?? []).map((b, i) => {
+    const w = [...view.dom.querySelectorAll(".page-gap")].find(
+      (x) => x.dataset.page === String(i)
+    )
+    return { bottom: w ? w.getBoundingClientRect().bottom - pmTop : null, remaining: b.remaining }
+  })
+})
+let strandedStart = 0
+strandedLanding.forEach((l, i) => {
+  strandedStart += Math.max(CONTENT_H - l.remaining, CONTENT_H) + BAND
+  ok(
+    l.bottom != null && Math.abs(l.bottom - strandedStart) <= 0.5,
+    `stranded-widget layout: widget ${i} ends at page ${i + 2} content start`,
+    l.bottom == null ? "widget missing" : `off by ${(l.bottom - strandedStart).toFixed(2)}px`
+  )
+})
+// Put the deleted text back so the suite ends near its old document.
+await page.evaluate(() => window.__pager.view.focus())
+await page.keyboard.down("Control")
+await page.keyboard.press("KeyZ")
+await page.keyboard.up("Control")
+await sleep(900)
+
 console.log("— doc.toJSON() carries no page nodes")
 const docDumped = await page.evaluate(() => {
   ;[...document.querySelectorAll(".panel-buttons button")][1].click()

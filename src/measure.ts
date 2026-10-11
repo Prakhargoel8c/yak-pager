@@ -46,10 +46,17 @@ export function measureBlock(
 ): MeasuredBlock {
   if (!el) return { height: 0, splitCandidates: null }
   const rect = el.getBoundingClientRect()
-  const widgetRects = Array.from(
+  const allRects = Array.from(
     el.querySelectorAll<HTMLElement>(".page-gap"),
     (w) => w.getBoundingClientRect()
   )
+  // A widget's box is inter-page space, so it is subtracted from the
+  // block's rect — but only while the rect actually contains it. An
+  // in-paragraph widget is a float, and a paragraph's height spans a
+  // float's box only while a line of text sits below the float. An edit
+  // that deletes everything after the widget inside its paragraph
+  // leaves the float anchored at the paragraph's end with no line below it.
+  const widgetRects = allRects.filter((r) => r.bottom <= rect.bottom + 1)
   let height = rect.height
   for (const r of widgetRects) height -= r.height
   const splits =
