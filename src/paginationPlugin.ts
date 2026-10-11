@@ -108,26 +108,6 @@ export function requestFullRecompute(view: EditorView) {
 /* Position bookkeeping (pure — runs inside transactions)              */
 /* ------------------------------------------------------------------ */
 
-/**
- * Union of the positions a transaction's steps touched, in FINAL doc
- * coordinates.
- */
-function changedRange(tr: Transaction): { from: number; to: number } | null {
-  if (!tr.docChanged) return null
-  let from = Infinity
-  let to = -Infinity
-  tr.mapping.maps.forEach((map, i) => {
-    // forEach gives each changed range in this step's coordinates:
-    // old ones pre-step, new ones post-step.
-    map.forEach((_oldStart, _oldEnd, newStart, newEnd) => {
-      const after = tr.mapping.slice(i + 1)
-      from = Math.min(from, after.map(newStart, -1))
-      to = Math.max(to, after.map(newEnd, 1))
-    })
-  })
-  return from === Infinity ? null : { from, to: Math.max(to, from) }
-}
-
 function remapRange(r: { from: number; to: number } | null, tr: Transaction) {
   if (!r) return null
   return { from: tr.mapping.map(r.from, -1), to: tr.mapping.map(r.to, 1) }
@@ -205,7 +185,7 @@ export function paginationPlugin(options: { onReflow?: (report: ReflowReport) =>
         // for every transaction. The runPass is scheduled only once in 100ms, so multiple transactions
         // might have happened before the call. Therefore, we need to find out the changes
         // in the current transaction as well as combine them with the previous transactions.
-        const dirty = unionRange(remapRange(prev.dirty, tr), changedRange(tr))
+        const dirty = unionRange(remapRange(prev.dirty, tr), tr.changedRange())
         let next: PaginationState = { ...prev, decos: prev.decos.map(tr.mapping, tr.doc), dirty }
 
         const meta = tr.getMeta(paginationKey) as LayoutMeta | undefined
