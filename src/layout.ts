@@ -88,7 +88,9 @@ export function makeGapWidgetDOM(pageIdx: number): HTMLElement {
   rule.className = "gap-rule"
   const num = document.createElement("div")
   num.className = "gap-num"
-  num.textContent = String(pageIdx + 1)
+  // Drawn by CSS (::after) from this attribute, not as text, so selecting
+  // or copying across a page boundary never picks up the number.
+  num.dataset.num = String(pageIdx + 1)
   el.append(rule, num)
   return el
 }

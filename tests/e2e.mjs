@@ -473,6 +473,25 @@ ok(
   `pass=${JSON.stringify(markPass)} rerun=${JSON.stringify(markRerun)}`
 )
 
+console.log("— page numbers are never part of a selection")
+// The number is drawn by CSS from data-num, so a selection that crosses a
+// page boundary (and anything copied from it) holds only document text.
+const acrossBreak = await page.evaluate(() => {
+  const { view, key } = window.__pager
+  const b = key.getState(view.state).breaks[0]
+  const TS = view.state.selection.constructor
+  view.dispatch(view.state.tr.setSelection(TS.create(view.state.doc, b.pos - 40, b.pos + 40)))
+  const dom = window.getSelection().toString().replace(/\s+/g, " ")
+  const doc = view.state.doc.textBetween(b.pos - 40, b.pos + 40, " ").replace(/\s+/g, " ")
+  return { dom, doc, numbers: [...view.dom.querySelectorAll(".gap-num")].map((n) => n.textContent).join("") }
+})
+ok(acrossBreak.numbers === "", "page numbers have no text in the DOM", JSON.stringify(acrossBreak.numbers))
+ok(
+  acrossBreak.dom.trim() === acrossBreak.doc.trim(),
+  "a selection across the first break selects only the document's text",
+  `dom=${JSON.stringify(acrossBreak.dom)} doc=${JSON.stringify(acrossBreak.doc)}`
+)
+
 console.log("— doc.toJSON() carries no page nodes")
 const docDumped = await page.evaluate(() => {
   ;[...document.querySelectorAll(".panel-buttons button")][1].click()
