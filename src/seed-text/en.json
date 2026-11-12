@@ -54,12 +54,12 @@
     {
       "title": "4. Scheduling and stability",
       "paras": [
-        "Measurement never happens synchronously inside a transaction. A transaction only marks a dirty range in plugin state; the plugin's view schedules a requestAnimationFrame pass, debounced about a hundred milliseconds, so bursts of typing collapse into one reflow.",
+        "Measurement never happens synchronously inside a transaction. A transaction only marks a dirty range in plugin state; the plugin's view then runs the pass in a microtask, right after the transaction and before the browser paints, so every keystroke is laid out before it appears, and transactions dispatched together share one reflow.",
         "The pass batches all DOM reads first, then solves on pure numbers, then writes. Reads and writes never interleave, so the browser lays out once per pass instead of thrashing.",
         "The pass is idempotent. Decorations are rebuilt from the same measurements into the same values, and every write is change-checked, so re-running the pass on a stable layout performs zero DOM operations. The dev panel has a button that does exactly this, so you can verify it empirically rather than on trust.",
         "Fonts settling or the window resizing can change rendered heights without the document changing at all, so those events trigger a full re-measure through a meta-transaction — no steps, no history entry, no document change.",
         "A paragraph that does not fit on the rest of a page splits at a line boundary instead of moving whole: the lines that fit stay, and the same gap widget — placed between two words — pushes the rest onto the next page. A paragraph taller than a full page simply spans several pages. Blocks that cannot split — headings, rules, break markers — are still pushed whole, and so is any paragraph with no usable line boundary (the minimums keep at least two lines on each side of every break).",
-        "Undo composes cleanly with all of this: Ctrl+Z replays the inverse of your typing steps, the decorations map themselves through the changed positions, and the next debounced pass re-derives the layout from fresh measurements. At no point does an undo ever walk through a pagination state."
+        "Undo composes cleanly with all of this: Ctrl+Z replays the inverse of your typing steps, the decorations map themselves through the changed positions, and the next pass re-derives the layout from fresh measurements. At no point does an undo ever walk through a pagination state."
       ]
     },
     {
