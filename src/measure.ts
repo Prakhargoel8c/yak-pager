@@ -117,6 +117,7 @@ interface LineRect {
  */
 function lineRects(el: HTMLElement): LineRect[] {
   const words = paragraphWords(el)
+  const order = new Map(words.map((w, i) => [w, i]))
   const sorted = [...words].sort(
     (a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left
   )
@@ -136,7 +137,9 @@ function lineRects(el: HTMLElement): LineRect[] {
   }
   return lines.map((ws) => ({
     top: Math.min(...ws.map((w) => w.rect.top)),
-    firstWord: ws.reduce((a, b) => (b.rect.left < a.rect.left ? b : a)),
+    // paragraphWords is in document order, so the line's first word is the
+    // earliest one, not the leftmost: in right-to-left text that is the last.
+    firstWord: ws.reduce((a, b) => (order.get(b)! < order.get(a)! ? b : a)),
   }))
 }
 
