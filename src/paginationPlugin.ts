@@ -17,7 +17,9 @@
  *
  * Scheduling: apply() only does position bookkeeping — it NEVER reads the
  * DOM, because it runs inside the transaction. The plugin's view marks
- * nothing more than "dirty" and schedules a rAF pass debounced ~100ms.
+ * nothing more than "dirty" and runs the pass in a microtask: right after
+ * the transaction that dirtied it, before the browser paints, once for all
+ * transactions dispatched in the same task.
  * The pass batches all reads first, solves on pure numbers, then applies
  * everything in ONE meta-transaction. That transaction carries no steps, so
  * it never enters history: Ctrl+Z undoes typing, never pagination.
@@ -31,6 +33,8 @@ import { Decoration, DecorationSet } from "prosemirror-view"
 import type { EditorView } from "prosemirror-view"
 import type { Node as PMNode } from "prosemirror-model"
 import { solve } from "./solver"
+import { startMeter, stopMeter } from "./apiMeter"
+import type { ApiCounts } from "./apiMeter"
 import type { SplitCandidate } from "./solver"
 import { CONTENT_H, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
 import { measureBlock } from "./measure"
@@ -84,6 +88,10 @@ export interface ReflowReport {
   durationMs: number
   measuredCount: number
   totalBlocks: number
+  /** Time spent measuring, solving, and applying the result. */
+  phaseMs: { measure: number; solve: number; apply: number }
+  /** Costly browser API calls made while measuring and while applying (apiMeter.ts). */
+  apiCalls: { measure: ApiCounts; apply: ApiCounts }
   fullRecompute: boolean
   ops: Array<{ kind: OpKind; text: string }>
   counts: ReflowOps
@@ -91,7 +99,7 @@ export interface ReflowReport {
 
 export const paginationKey = new PluginKey<PaginationState>("pagination")
 
-/** Meta: the rAF pass reports fresh layout (no steps — invisible to history). */
+/** Meta: the pass reports fresh layout (no steps — invisible to history). */
 interface LayoutMeta {
   type: "layout"
   breaks: BreakInfo[]
@@ -211,7 +219,7 @@ export function paginationPlugin(
        *  1. Keep stored positions valid: decorations map themselves through
        *     tr.mapping; the dirty range is remapped the same way.
        *  2. Widen the dirty range by whatever this transaction changed, or
-       *     replace the layout entirely when the rAF pass reports in.
+       *     replace the layout entirely when the pass reports in.
        */
       apply(tr: Transaction, prev: PaginationState): PaginationState {
         const full = tr.getMeta(paginationKey) as FullMeta | undefined
@@ -225,7 +233,7 @@ export function paginationPlugin(
         }
 
         // We need both remapRange and changedRange because the UI doesn't get updated
-        // for every transaction. The runPass is scheduled only once in 100ms, so multiple transactions
+        // for every transaction. One pass runs per task (a microtask), so several transactions
         // might have happened before the call. Therefore, we need to find out the changes
         // in the current transaction as well as combine them with the previous transactions.
         const dirty = unionRange(remapRange(prev.dirty, tr), touchedRange(tr))
@@ -270,8 +278,7 @@ export function paginationPlugin(
       // while untouched blocks keep theirs across the transaction.
       const cache = new WeakMap<PMNode, MeasuredBlock>()
 
-      let timer: ReturnType<typeof setTimeout> | null = null
-      let raf: number | null = null
+      let queued = false
       let pendingFull = false
       let destroyed = false
 
@@ -287,15 +294,14 @@ export function paginationPlugin(
       const schedule = (full = false) => {
         if (destroyed) return
         if (full) pendingFull = true
-        if (raf != null) return
-        if (timer != null) clearTimeout(timer)
-        timer = setTimeout(() => {
-          timer = null
-          raf = requestAnimationFrame(() => {
-            raf = null
-            runPass()
-          })
-        }, 100)
+        if (queued) return
+        queued = true
+        // Not synchronously: update() runs inside a dispatch, and the pass
+        // dispatches its own meta-transaction.
+        queueMicrotask(() => {
+          queued = false
+          runPass()
+        })
       }
 
       const gapName = (el: HTMLElement) => `.page-gap-${el.dataset.page}`
@@ -434,6 +440,7 @@ export function paginationPlugin(
         createdThisPass.clear()
         const t0 = performance.now()
         const usePretext = state.measurer === "pretext"
+        const measureCalls = startMeter()
         // A full pass follows fonts loading or a resize: widths Pretext
         // measured before a font loaded are the fallback font's.
         if (full && usePretext) clearPretextCache()
@@ -475,6 +482,9 @@ export function paginationPlugin(
           })
         })
 
+        stopMeter()
+        const t1 = performance.now()
+
         // -------- (b) SOLVE: pure, on numbers only ------------------------
         const { breaks: solved, pageStarts, fills } = solve(
           blocks.map((b) => ({ pos: b.pos, height: b.height, splits: b.splitCandidates })),
@@ -486,8 +496,11 @@ export function paginationPlugin(
           remaining: s.remaining,
         }))
 
+        const t2 = performance.now()
+
         // -------- (c) DECORATE: one meta-transaction ----------------------
         mo.takeRecords() // discard anything before this point
+        const applyCalls = startMeter()
         paintSheets(stack, pageStarts, fills)
         view.dispatch(
           view.state.tr.setMeta(paginationKey, {
@@ -503,8 +516,9 @@ export function paginationPlugin(
         // reconciliation. Every write is change-checked: a stable layout
         // performs zero DOM operations.
         syncView(breaks, pool)
+        stopMeter()
         const records = mo.takeRecords()
-        const t1 = performance.now()
+        const t3 = performance.now()
 
         const { ops, counts } = classify(records)
         passCount++
@@ -513,9 +527,11 @@ export function paginationPlugin(
           pageCount: breaks.length + 1,
           breakPositions: breaks.map((b) => b.pos),
           remainders: breaks.map((b) => b.remaining),
-          durationMs: t1 - t0,
+          durationMs: t3 - t0,
           measuredCount: measured,
           totalBlocks: blocks.length,
+          phaseMs: { measure: t1 - t0, solve: t2 - t1, apply: t3 - t2 },
+          apiCalls: { measure: measureCalls, apply: applyCalls },
           fullRecompute: full,
           ops,
           counts,
@@ -529,8 +545,6 @@ export function paginationPlugin(
         },
         destroy() {
           destroyed = true
-          if (timer != null) clearTimeout(timer)
-          if (raf != null) cancelAnimationFrame(raf)
           mo.disconnect()
           for (const el of pool.values()) el.remove()
           pool.clear()
