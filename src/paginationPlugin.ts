@@ -113,6 +113,27 @@ function remapRange(r: { from: number; to: number } | null, tr: Transaction) {
   return { from: tr.mapping.map(r.from, -1), to: tr.mapping.map(r.to, 1) }
 }
 
+/**
+ * tr.changedRange() plus the steps it can't see: adding or removing a mark
+ * and setting a node attribute map no positions, so their maps are empty,
+ * yet a fontSize or strong mark changes how tall a paragraph is.
+ */
+function touchedRange(tr: Transaction) {
+  let range = tr.changedRange()
+  tr.steps.forEach((step, i) => {
+    let empty = true
+    step.getMap().forEach(() => (empty = false))
+    if (!empty) return
+    const { from, to, pos } = step as unknown as { from?: number; to?: number; pos?: number }
+    const start = from ?? pos
+    const end = to ?? (pos != null ? pos + 1 : undefined)
+    if (start == null || end == null) return
+    const later = tr.mapping.slice(i + 1)
+    range = unionRange(range, { from: later.map(start, -1), to: later.map(end, 1) })
+  })
+  return range
+}
+
 function unionRange(
   a: { from: number; to: number } | null,
   b: { from: number; to: number } | null
@@ -185,7 +206,7 @@ export function paginationPlugin(options: { onReflow?: (report: ReflowReport) =>
         // for every transaction. The runPass is scheduled only once in 100ms, so multiple transactions
         // might have happened before the call. Therefore, we need to find out the changes
         // in the current transaction as well as combine them with the previous transactions.
-        const dirty = unionRange(remapRange(prev.dirty, tr), tr.changedRange())
+        const dirty = unionRange(remapRange(prev.dirty, tr), touchedRange(tr))
         let next: PaginationState = { ...prev, decos: prev.decos.map(tr.mapping, tr.doc), dirty }
 
         const meta = tr.getMeta(paginationKey) as LayoutMeta | undefined
