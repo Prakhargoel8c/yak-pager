@@ -429,6 +429,41 @@ await page.keyboard.press("KeyZ")
 await page.keyboard.up("Control")
 await sleep(900)
 
+console.log("— regression: a mark change re-measures the paragraph")
+// Adding or removing a mark (fontSize, strong, em) maps no positions, so
+// tr.changedRange() is null for it. The pass used to see no dirty range and
+// never ran: a paragraph made larger near a page's bottom overflowed into
+// the gap and the next page until something else triggered a pass.
+const markBefore = await page.evaluate(() => {
+  const { view, key } = window.__pager
+  const b = key.getState(view.state).breaks[0]
+  const $b = view.state.doc.resolve(b.pos)
+  const off = $b.depth > 0 ? $b.before(1) : b.pos - view.state.doc.childBefore(b.pos).node.nodeSize
+  const node = view.state.doc.nodeAt(off)
+  view.dispatch(
+    view.state.tr.addMark(off + 1, off + 1 + node.content.size, view.state.schema.marks.fontSize.create({ size: 28 }))
+  )
+  return key.getState(view.state).breaks.map((b) => b.pos)
+})
+await sleep(900)
+const markPass = await page.evaluate(() =>
+  window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
+)
+await page.evaluate(() => [...document.querySelectorAll(".panel-buttons button")][0].click())
+await sleep(800)
+const markRerun = await page.evaluate(() =>
+  window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
+)
+ok(
+  JSON.stringify(markPass) !== JSON.stringify(markBefore),
+  "a 28px fontSize mark on the paragraph at the first break moved the breaks"
+)
+ok(
+  JSON.stringify(markPass) === JSON.stringify(markRerun),
+  "debounced pass after the mark change agrees with a full re-run",
+  `pass=${JSON.stringify(markPass)} rerun=${JSON.stringify(markRerun)}`
+)
+
 console.log("— doc.toJSON() carries no page nodes")
 const docDumped = await page.evaluate(() => {
   ;[...document.querySelectorAll(".panel-buttons button")][1].click()
