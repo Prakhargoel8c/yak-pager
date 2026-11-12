@@ -34,7 +34,7 @@ import { solve } from "./solver"
 import type { SplitCandidate } from "./solver"
 import { CONTENT_H, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
 import { measureBlock } from "./measure"
-import { editorContentWidth, measureWithPretext, syncPretextLocale } from "./pretextMeasure"
+import { editorContentWidth, measureWithPretext } from "./pretextMeasure"
 import { clearCache as clearPretextCache } from "@chenglou/pretext"
 import type { MeasuredBlock } from "./measure"
 
@@ -437,7 +437,6 @@ export function paginationPlugin(
         // A full pass follows fonts loading or a resize: widths Pretext
         // measured before a font loaded are the fallback font's.
         if (full && usePretext) clearPretextCache()
-        if (usePretext) syncPretextLocale(view)
 
         // -------- (a) MEASURE: batched DOM reads, then nothing but reads --
         // All getBoundingClientRect calls happen before any write, so the
