@@ -55,6 +55,8 @@ export interface PaginationState {
   pageCount: number
   /** Doc-coordinate range that must be re-measured before the next solve. */
   dirty: { from: number; to: number } | null
+  /** How paragraphs and headings are measured; see Measurer. */
+  measurer: Measurer
 }
 
 export type OpKind =
@@ -100,10 +102,16 @@ interface LayoutMeta {
 /** Meta: fonts/resize/image — re-measure everything (heights can change without the doc changing). */
 interface FullMeta {
   type: "full"
+  /** Switch measurers; the full re-measure that follows uses the new one. */
+  measurer?: Measurer
 }
 
 export function requestFullRecompute(view: EditorView) {
   view.dispatch(view.state.tr.setMeta(paginationKey, { type: "full" } satisfies FullMeta))
+}
+
+export function setMeasurer(view: EditorView, measurer: Measurer) {
+  view.dispatch(view.state.tr.setMeta(paginationKey, { type: "full", measurer } satisfies FullMeta))
 }
 
 /* ------------------------------------------------------------------ */
@@ -159,7 +167,6 @@ export type Measurer = "dom" | "pretext"
 export function paginationPlugin(
   options: { onReflow?: (report: ReflowReport) => void; measurer?: Measurer } = {}
 ) {
-  const usePretext = options.measurer !== "dom"
   // Per-editor resources shared by state.apply and the view code below.
   // The widget pool is what "the single reused page-gap widget" means
   // concretely: element i is created once and re-inserted forever after.
@@ -196,6 +203,7 @@ export function paginationPlugin(
         breaks: [],
         pageCount: 1,
         dirty: null,
+        measurer: options.measurer ?? "pretext",
       }),
 
       /**
@@ -206,9 +214,11 @@ export function paginationPlugin(
        *     replace the layout entirely when the rAF pass reports in.
        */
       apply(tr: Transaction, prev: PaginationState): PaginationState {
-        if (tr.getMeta(paginationKey) != null && (tr.getMeta(paginationKey) as FullMeta).type === "full") {
+        const full = tr.getMeta(paginationKey) as FullMeta | undefined
+        if (full?.type === "full") {
           return {
             ...prev,
+            measurer: full.measurer ?? prev.measurer,
             decos: prev.decos.map(tr.mapping, tr.doc),
             dirty: { from: 0, to: tr.doc.content.size },
           }
@@ -423,6 +433,7 @@ export function paginationPlugin(
         if (!full && state.dirty == null && passCount > 0) return
         createdThisPass.clear()
         const t0 = performance.now()
+        const usePretext = state.measurer === "pretext"
         // A full pass follows fonts loading or a resize: widths Pretext
         // measured before a font loaded are the fallback font's.
         if (full && usePretext) clearPretextCache()

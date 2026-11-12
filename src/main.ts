@@ -5,7 +5,7 @@ import { keymap } from "prosemirror-keymap"
 import { baseKeymap } from "prosemirror-commands"
 import { history, undo, redo } from "prosemirror-history"
 import { buildSeedDoc } from "./seed"
-import { paginationPlugin, paginationKey, requestFullRecompute } from "./paginationPlugin"
+import { paginationPlugin, paginationKey, requestFullRecompute, setMeasurer } from "./paginationPlugin"
 import type { Measurer } from "./paginationPlugin"
 import { compareWithDom } from "./pretextMeasure"
 import { buildToolbar, insertPageBreak, insertHardBreak } from "./toolbar"
@@ -46,6 +46,7 @@ const view = new EditorView(paperHost, {
 
 toolbar = buildToolbar(view, document.getElementById("toolbar")!)
 buildPrintPreviewButtons(view, document.getElementById("toolbar")!)
+document.getElementById("toolbar")!.append(measurerSelect())
 panel.attach(view)
 
   // Poke at the editor from the console: window.__pager.view.state.doc, ...
@@ -56,9 +57,30 @@ panel.attach(view)
   }).__pager = {
     view,
     key: paginationKey,
-    measurer,
+    get measurer() {
+      return paginationKey.getState(view.state)!.measurer
+    },
     compareWithDom: () => compareWithDom(view),
   }
+
+/** Switches the measurer live and keeps ?measure= in the URL, so a reload keeps the choice. */
+function measurerSelect(): HTMLSelectElement {
+  const sel = document.createElement("select")
+  sel.title = "How paragraphs and headings are measured"
+  for (const [value, label] of [["pretext", "Measure: Pretext"], ["dom", "Measure: DOM"]]) {
+    sel.append(new Option(label, value, false, value === measurer))
+  }
+  sel.onchange = () => {
+    const next = sel.value as Measurer
+    const url = new URL(location.href)
+    if (next === "dom") url.searchParams.set("measure", "dom")
+    else url.searchParams.delete("measure")
+    window.history.replaceState(null, "", url)
+    setMeasurer(view, next)
+    view.focus()
+  }
+  return sel
+}
 
 // Heights can change without the document changing: fonts settling, images
 // loading, the window resizing. Each triggers a full re-measure through a
