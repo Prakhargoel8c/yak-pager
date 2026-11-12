@@ -52,7 +52,6 @@ const view = new EditorView(paperHost, {
 toolbar = buildToolbar(view, document.getElementById("toolbar")!)
 buildPrintPreviewButtons(view, document.getElementById("toolbar")!)
 document.getElementById("toolbar")!.append(measurerSelect(), languageSelect())
-paperHost.lang = lang
 panel.attach(view)
 
   // Poke at the editor from the console: window.__pager.view.state.doc, ...
@@ -106,7 +105,6 @@ function languageSelect(): HTMLSelectElement {
     else url.searchParams.set("lang", next)
     window.history.replaceState(null, "", url)
     const current = paginationKey.getState(view.state)!.measurer
-    paperHost.lang = next
     view.updateState(EditorState.create({ doc: buildSeedDoc(next), plugins: view.state.plugins }))
     setMeasurer(view, current)
     toolbar?.sync()
