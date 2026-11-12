@@ -4,7 +4,8 @@ import { EditorView } from "prosemirror-view"
 import { keymap } from "prosemirror-keymap"
 import { baseKeymap } from "prosemirror-commands"
 import { history, undo, redo } from "prosemirror-history"
-import { buildSeedDoc } from "./seed"
+import { buildSeedDoc, LANGUAGES } from "./seed"
+import type { Language } from "./seed"
 import { paginationPlugin, paginationKey, requestFullRecompute, setMeasurer } from "./paginationPlugin"
 import type { Measurer } from "./paginationPlugin"
 import { compareWithDom } from "./pretextMeasure"
@@ -14,7 +15,11 @@ import { createDevPanel } from "./devPanel"
 import "./styles.css"
 
 // Paragraphs and headings are measured with Pretext; ?measure=dom reads them from the DOM instead.
-const measurer: Measurer = new URLSearchParams(location.search).get("measure") === "dom" ? "dom" : "pretext"
+const params = new URLSearchParams(location.search)
+const measurer: Measurer = params.get("measure") === "dom" ? "dom" : "pretext"
+// ?lang=hi|ml|kn loads the seed document in Hindi, Malayalam or Kannada; English otherwise.
+const langParam = params.get("lang") ?? ""
+const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 
 const paperHost = document.getElementById("paper")!
 const panel = createDevPanel(document.getElementById("panel")!)
@@ -23,7 +28,7 @@ let toolbar: { sync: () => void } | null = null
 
 const view = new EditorView(paperHost, {
   state: EditorState.create({
-    doc: buildSeedDoc(),
+    doc: buildSeedDoc(lang),
     plugins: [
       history(),
       keymap({
@@ -46,7 +51,7 @@ const view = new EditorView(paperHost, {
 
 toolbar = buildToolbar(view, document.getElementById("toolbar")!)
 buildPrintPreviewButtons(view, document.getElementById("toolbar")!)
-document.getElementById("toolbar")!.append(measurerSelect())
+document.getElementById("toolbar")!.append(measurerSelect(), languageSelect())
 panel.attach(view)
 
   // Poke at the editor from the console: window.__pager.view.state.doc, ...
@@ -77,6 +82,33 @@ function measurerSelect(): HTMLSelectElement {
     else url.searchParams.delete("measure")
     window.history.replaceState(null, "", url)
     setMeasurer(view, next)
+    view.focus()
+  }
+  return sel
+}
+
+/**
+ * Loads the seed document in another language as a fresh editor state (its
+ * own undo history; switching language is not an edit), keeps ?lang= in the
+ * URL, and re-paginates with whichever measurer is selected now.
+ */
+function languageSelect(): HTMLSelectElement {
+  const sel = document.createElement("select")
+  sel.title = "Document language"
+  for (const [value, { label }] of Object.entries(LANGUAGES)) {
+    sel.append(new Option(label, value, false, value === lang))
+  }
+  sel.onchange = () => {
+    const next = sel.value as Language
+    const url = new URL(location.href)
+    if (next === "en") url.searchParams.delete("lang")
+    else url.searchParams.set("lang", next)
+    window.history.replaceState(null, "", url)
+    const current = paginationKey.getState(view.state)!.measurer
+    view.updateState(EditorState.create({ doc: buildSeedDoc(next), plugins: view.state.plugins }))
+    setMeasurer(view, current)
+    toolbar?.sync()
+    panel.sync()
     view.focus()
   }
   return sel
