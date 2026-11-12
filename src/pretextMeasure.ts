@@ -53,6 +53,29 @@ function blockStyle(node: PMNode): BlockStyle | null {
   return null
 }
 
+const lineHeights = new Map<string, number>()
+
+/**
+ * The height of one line of `size`px text at a unitless `lineHeight`, as
+ * this browser lays it out. Not size × lineHeight: WebKit rounds line
+ * heights down to whole pixels (22px × 1.3 is 28 there, 28.6 in Chrome and
+ * Firefox), so it is read once per size from a hidden probe and cached.
+ */
+function lineHeightPx(size: number, lineHeight: number): number {
+  const key = `${size}/${lineHeight}`
+  let px = lineHeights.get(key)
+  if (px === undefined) {
+    const probe = document.createElement("div")
+    probe.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;white-space:nowrap;font-family:${FAMILY};font-size:${size}px;line-height:${lineHeight}`
+    probe.textContent = "x"
+    document.body.append(probe)
+    px = probe.getBoundingClientRect().height
+    probe.remove()
+    lineHeights.set(key, px)
+  }
+  return px
+}
+
 /** `strong` is `font-weight: bolder` in the UA stylesheet. */
 const bolder = (weight: number) => (weight < 600 ? 700 : 900)
 
@@ -80,8 +103,8 @@ interface Line {
  * breaks.
  *
  * Line heights follow CSS for a unitless line-height in one font family: a
- * line is as tall as its largest font size × line-height, never less than
- * the block's own (the strut). Split candidates use the same convention as
+ * line is as tall as one line of its largest font size (lineHeightPx),
+ * never less than the block's own (the strut). Split candidates use the same convention as
  * measure.ts: positions relative to the content start, heights to the
  * carried line's line-box top.
  */
@@ -108,7 +131,7 @@ export function measureWithPretext(node: PMNode, contentWidth: number): Measured
   })
   if (!supported) return null
 
-  const strut = style.size * style.lineHeight
+  const strut = lineHeightPx(style.size, style.lineHeight)
   const lines: Line[] = []
   if (items.length > 0) {
     // The editor is white-space: pre-wrap (#paper .ProseMirror).
@@ -124,7 +147,7 @@ export function measureWithPretext(node: PMNode, contentWidth: number): Measured
           if (k >= 0) pos = starts[fragment.itemIndex] + fragment.sourceStart + k
         }
       }
-      lines.push({ height: tallest * style.lineHeight, pos })
+      lines.push({ height: lineHeightPx(tallest, style.lineHeight), pos })
     })
   }
   // An empty block still renders one line, and a trailing hard break gets a
