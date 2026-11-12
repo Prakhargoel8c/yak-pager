@@ -13,8 +13,8 @@ import { buildPrintPreviewButtons } from "./printPreview"
 import { createDevPanel } from "./devPanel"
 import "./styles.css"
 
-// ?measure=pretext measures paragraphs and headings with Pretext instead of the DOM.
-const measurer: Measurer = new URLSearchParams(location.search).get("measure") === "pretext" ? "pretext" : "dom"
+// Paragraphs and headings are measured with Pretext; ?measure=dom reads them from the DOM instead.
+const measurer: Measurer = new URLSearchParams(location.search).get("measure") === "dom" ? "dom" : "pretext"
 
 const paperHost = document.getElementById("paper")!
 const panel = createDevPanel(document.getElementById("panel")!)

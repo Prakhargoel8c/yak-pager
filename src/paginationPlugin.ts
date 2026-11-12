@@ -129,16 +129,16 @@ function unionRange(
 /* ------------------------------------------------------------------ */
 
 /**
- * "dom" reads every block's layout from the DOM (measure.ts). "pretext"
- * computes paragraphs and headings with Pretext (pretextMeasure.ts) and
- * reads only the blocks it can't model from the DOM.
+ * "pretext" (the default) computes paragraphs and headings with Pretext
+ * (pretextMeasure.ts) and reads only the blocks it can't model from the
+ * DOM. "dom" reads every block's layout from the DOM (measure.ts).
  */
 export type Measurer = "dom" | "pretext"
 
 export function paginationPlugin(
   options: { onReflow?: (report: ReflowReport) => void; measurer?: Measurer } = {}
 ) {
-  const usePretext = options.measurer === "pretext"
+  const usePretext = options.measurer !== "dom"
   // Per-editor resources shared by state.apply and the view code below.
   // The widget pool is what "the single reused page-gap widget" means
   // concretely: element i is created once and re-inserted forever after.

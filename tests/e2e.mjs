@@ -42,7 +42,7 @@ page.on("console", (m) => {
   if (m.type() === "error") console.log("  [console.error]", m.text())
 })
 
-// E2E_QUERY=?measure=pretext runs the suite with the Pretext measurer.
+// E2E_QUERY=?measure=dom runs the suite with the DOM measurer.
 await page.goto(`http://localhost:4179/${process.env.E2E_QUERY ?? ""}`, { waitUntil: "networkidle0" })
 await sleep(1200) // initial pass + fonts.ready-triggered full pass
 

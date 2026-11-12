@@ -81,15 +81,15 @@ Justification costs pagination nothing: it stretches spaces without changing whi
 
 ---
 
-# 5. Measuring text with Pretext (opt-in)
+# 5. Measuring text with Pretext
 
-`?measure=pretext` swaps MEASURE for paragraphs and headings from DOM reads to [Pretext](https://github.com/chenglou/pretext), which computes line breaks and widths from the text and its marks using Canvas measurement and the browser engine's own line-break rules. Everything else (pageBreak, horizontal rules, and any block with inline content other than text and hard breaks) still measures from the DOM. The default stays `dom`.
+MEASURE for paragraphs and headings uses [Pretext](https://github.com/chenglou/pretext), which computes line breaks and widths from the text and its marks using Canvas measurement and the browser engine's own line-break rules. Everything else (pageBreak, horizontal rules, and any block with inline content other than text and hard breaks) still measures from the DOM. `?measure=dom` (or `measurer: "dom"` on the plugin) measures everything from the DOM, as before.
 
 **Why:** the DOM path reads a Range rect for every word of every changed paragraph. Pretext needs one layout read per pass (the editor's content width); the rest is arithmetic over cached widths. It is also idempotent without the widget subtraction in `measure.ts`, because it never sees the widget.
 
 **What it models** (`src/pretextMeasure.ts`, which must match `styles.css` like `layout.ts` does): the editor font, block sizes, unitless line-heights and paddings; `strong` as `font-weight: bolder`, `em`, the `fontSize` mark; `white-space: pre-wrap`; hard breaks, including the extra line a trailing one gets. A line is as tall as its largest font size × the block's line-height.
 
-**How it was checked:** `npm run pretext-compare` measures every block both ways in Chrome. On the seed plus a set of stress blocks (long words, a URL, hard breaks, an empty paragraph, mixed font sizes, marks in headings, justified text), every height matches to 0.5px and every DOM split candidate is found by Pretext at the same position. The e2e suite gives the same results with `E2E_QUERY=?measure=pretext`, landing checks included. Two differences remain, and in both the DOM path is the inexact side:
+**How it was checked:** `npm run pretext-compare` measures every block both ways in Chrome. On the seed plus a set of stress blocks (long words, a URL, hard breaks, an empty paragraph, mixed font sizes, marks in headings, justified text), every height matches to 0.5px and every DOM split candidate is found by Pretext at the same position. The e2e suite gives the same results in both modes (`E2E_QUERY=?measure=dom` for the DOM path), landing checks included. Two differences remain, and in both the DOM path is the inexact side:
 
 - Pretext finds line starts inside a whitespace-free token: after a hyphen (`non-|empty`, `re-|inserted`) or inside a long word or URL. The DOM path groups words with `/\S+/`, so it never sees those lines as split candidates.
 - On a line with a larger font, Pretext puts the line-box top 2–3px lower than the DOM path, which assumes every line has the first line's half-leading (the "off by the extra leading" noted above).
