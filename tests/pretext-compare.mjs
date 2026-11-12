@@ -6,12 +6,17 @@
  * Runs on the seed document, then again after appending blocks that stress
  * the line model: long unbreakable words, a URL, hard breaks (including a
  * trailing one), an empty paragraph, mixed font sizes on one line, marks in
- * headings, and justified text.
+ * headings, and justified text. Then once more with Indic and mixed-script
+ * text (tests/indic-samples.json): every sample as a paragraph, plus Indic
+ * headings, marks, font sizes and hard breaks.
  *
  * Requires google-chrome on PATH (or CHROME=/path/to/chrome) and a build.
  */
 import { spawn } from "node:child_process"
+import { readFileSync } from "node:fs"
 import puppeteer from "puppeteer-core"
+
+const INDIC = JSON.parse(readFileSync(new URL("./indic-samples.json", import.meta.url), "utf8"))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -95,6 +100,35 @@ try {
   })
   await sleep(600)
   await report("seed + stress blocks")
+
+  console.log("— Indic and mixed-script blocks")
+  await page.evaluate((samples) => {
+    const { view } = window.__pager
+    const { schema } = view.state
+    const t = (s, ...marks) => schema.text(s, marks)
+    const strong = schema.marks.strong.create()
+    const em = schema.marks.em.create()
+    const size = (px) => schema.marks.fontSize.create({ size: px })
+    const p = (attrs, ...content) => schema.nodes.paragraph.create(attrs, content)
+    const br = () => schema.nodes.hard_break.create()
+    const h = (level, ...content) => schema.nodes.heading.create({ level }, content)
+    const [hi1, hi2] = samples.hi
+    const [ml1] = samples.ml
+    const [ta1] = samples.ta
+    const blocks = [
+      ...Object.values(samples).flat().map((text) => p(null, t(text))),
+      h(1, t("उच्च न्यायालय, दिल्ली — रिट याचिका (सिविल) संख्या 4821/2025 में आदेश")),
+      h(2, t("ഹൈക്കോടതി ഉത്തരവ് "), t("(കേരളം)", em)),
+      h(3, t("சென்னை உயர் நீதிமன்றம்", strong)),
+      p(null, t(hi1.slice(0, 60), strong), t(hi1.slice(60, 140)), t(hi1.slice(140), em)),
+      p(null, t(hi2.slice(0, 50)), t(hi2.slice(50, 90), size(26)), t(hi2.slice(90))),
+      p(null, t(ml1.slice(0, 80)), br(), t(ml1.slice(80)), br(), br(), t(ta1)),
+      p({ align: "justify" }, t(hi1 + " " + hi2)),
+    ]
+    view.dispatch(view.state.tr.insert(view.state.doc.content.size, blocks))
+  }, INDIC)
+  await sleep(600)
+  await report("seed + stress + Indic blocks")
 } finally {
   await browser.close()
   try { process.kill(-server.pid) } catch {}
