@@ -24,6 +24,7 @@ import {
   walkRichInlineLineRanges,
 } from "@chenglou/pretext/rich-inline"
 import type { RichInlineItem } from "@chenglou/pretext/rich-inline"
+import { setLocale } from "@chenglou/pretext"
 import { measureBlock } from "./measure"
 import type { MeasuredBlock } from "./measure"
 import type { SplitCandidate } from "./solver"
@@ -145,6 +146,22 @@ export function measureWithPretext(node: PMNode, contentWidth: number): Measured
   }
 }
 
+let locale: string | undefined | null = null
+
+/**
+ * Measure under the editor's language, not only <html lang>, which is all
+ * Pretext reads by itself. The language picks fonts: Chrome lays out
+ * lang="hi" text in a wider Devanagari font than unlabelled text, so a
+ * canvas without the editor's lang measures the wrong font and predicts
+ * too few lines. setLocale also clears Pretext's caches.
+ */
+export function syncPretextLocale(view: EditorView) {
+  const lang = view.dom.closest("[lang]")?.getAttribute("lang") ?? undefined
+  if (lang === locale) return
+  locale = lang
+  setLocale(lang)
+}
+
 export interface MeasureDiff {
   index: number
   type: string
@@ -177,6 +194,7 @@ export function compareWithDom(view: EditorView): { compared: number; diffs: Mea
   let compared = 0
   let index = 0
   const width = editorContentWidth(view)
+  syncPretextLocale(view)
   view.state.doc.forEach((node, offset) => {
     const i = index++
     const pretext = measureWithPretext(node, width)
