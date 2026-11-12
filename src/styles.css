@@ -181,6 +181,8 @@ body {
   position: relative;
   height: calc(216px + var(--push, 0px));
   pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
 .page-gap .gap-rule {
@@ -201,6 +203,9 @@ body {
   justify-content: center;
   font-size: 11px;
   color: #6b7280;
+}
+.page-gap .gap-num::after {
+  content: attr(data-num);
 }
 
 /* In-paragraph placement: a break that splits a paragraph draws the same
