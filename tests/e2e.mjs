@@ -101,7 +101,7 @@ await page.evaluate(() => {
   pm.focus()
 })
 await page.keyboard.type(" UNDOABLE-SENTENCE")
-await sleep(900) // debounced reflow
+await sleep(300) // the pass runs in a microtask after each transaction
 const chipsTyped = await readChips()
 ok((chipsTyped.other ?? 0) === 0, "typing reflow: no unexpected DOM mutations", JSON.stringify(chipsTyped))
 ok(
@@ -114,7 +114,7 @@ ok(textWith.endsWith("UNDOABLE-SENTENCE"), "typed text present", textWith.slice(
 await page.keyboard.down("Control")
 await page.keyboard.press("KeyZ")
 await page.keyboard.up("Control")
-await sleep(900) // debounced reflow
+await sleep(300) // the pass runs in a microtask after each transaction
 const textAfter = await page.evaluate(() => document.querySelector(".ProseMirror").lastElementChild.textContent)
 ok(
   !textAfter.includes("UNDOABLE-SENTENCE"),
@@ -145,12 +145,21 @@ await page.evaluate(() => {
   sel.addRange(range)
   document.querySelector(".ProseMirror").focus()
 })
+const passBefore = await page.evaluate(() => window.__pager.reflows.at(-1)?.pass ?? 0)
 for (let i = 0; i < 8; i++) {
   await page.keyboard.press("Enter")
   await page.keyboard.type("newly inserted paragraph")
 }
-await sleep(1100)
-const chips3 = await readChips()
+await sleep(300)
+// A pass runs per keystroke, so the moves are spread over many passes: sum
+// the DOM operations of every pass the typing caused.
+const chips3 = await page.evaluate((after) => {
+  const sum = {}
+  for (const r of window.__pager.reflows.filter((r) => r.pass > after)) {
+    for (const [k, n] of Object.entries(r.counts)) sum[k] = (sum[k] ?? 0) + n
+  }
+  return sum
+}, passBefore)
 ok((chips3.other ?? 0) === 0, "break-move reflow: no unexpected mutations", JSON.stringify(chips3))
 ok((chips3.insertBefore ?? 0) > 0, "widgets moved via insertBefore", `insertBefore=${chips3.insertBefore}`)
 ok((chips3.setAttribute ?? 0) > 0, "pushes updated via setAttribute (--push)", `setAttribute=${chips3.setAttribute}`)
@@ -346,7 +355,7 @@ await page.evaluate(() => {
   document.querySelector(".ProseMirror").focus()
 })
 await page.select('select[title="Alignment"]', "justify")
-await sleep(900) // debounced reflow
+await sleep(300) // the pass runs in a microtask after each transaction
 const splitJust = await measureJustified("split")
 ok(splitJust.error === null && splitJust.justified, "toolbar Alignment control justified the split paragraph")
 ok(splitJust.hasGap, "that paragraph still straddles a page (contains a gap widget)")
@@ -382,7 +391,7 @@ const stranded = await page.evaluate(() => {
   const b = s.breaks[idx]
   const $p = view.state.doc.resolve(b.pos)
   view.dispatch(view.state.tr.delete(b.pos, $p.end()))
-  // The state the debounced pass will measure: the widget now overhangs
+  // The state the next pass will measure: the widget now overhangs
   // the paragraph's rect — the pre-condition of the bug.
   const w = view.dom.querySelector(`.page-gap[data-page="${idx}"]`)
   const p = w && w.closest("p")
@@ -396,7 +405,7 @@ ok(
   stranded.overhang === true,
   "the widget's float overhangs the paragraph's rect (the poison state)"
 )
-await sleep(900) // debounced pass measures the overhanging-widget state
+await sleep(300) // the next pass measures the overhanging-widget state
 const strandedPass = await page.evaluate(() =>
   window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
 )
@@ -407,7 +416,7 @@ const strandedRerun = await page.evaluate(() =>
 )
 ok(
   JSON.stringify(strandedPass) === JSON.stringify(strandedRerun),
-  "debounced pass on the stranded-widget state agrees with a full re-run",
+  "the pass on the stranded-widget state agrees with a full re-run",
   `pass=${JSON.stringify(strandedPass)} rerun=${JSON.stringify(strandedRerun)}`
 )
 // And the geometry stays pixel-exact: every widget still ends exactly at the
@@ -469,7 +478,7 @@ ok(
 )
 ok(
   JSON.stringify(markPass) === JSON.stringify(markRerun),
-  "debounced pass after the mark change agrees with a full re-run",
+  "the pass after the mark change agrees with a full re-run",
   `pass=${JSON.stringify(markPass)} rerun=${JSON.stringify(markRerun)}`
 )
 

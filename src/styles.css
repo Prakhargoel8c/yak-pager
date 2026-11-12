@@ -324,6 +324,32 @@ body {
   background: #3f1414;
   color: #f87171;
 }
+.panel-card .phases {
+  margin-bottom: 8px;
+}
+.panel-card .apis {
+  margin-bottom: 8px;
+}
+.panel-card .apis .chips {
+  margin-top: 4px;
+}
+.api-chip {
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+}
+.api-layout {
+  background: #3f1414;
+  color: #f87171;
+}
+.api-text {
+  background: #3a2a0a;
+  color: #fbbf24;
+}
+.api-none {
+  background: #11331e;
+  color: #4ade80;
+}
 
 .oplog {
   border-top: 1px solid #232c37;

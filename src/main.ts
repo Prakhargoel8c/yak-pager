@@ -7,11 +7,12 @@ import { history, undo, redo } from "prosemirror-history"
 import { buildSeedDoc, LANGUAGES } from "./seed"
 import type { Language } from "./seed"
 import { paginationPlugin, paginationKey, requestFullRecompute, setMeasurer } from "./paginationPlugin"
-import type { Measurer } from "./paginationPlugin"
+import type { Measurer, ReflowReport } from "./paginationPlugin"
 import { compareWithDom } from "./pretextMeasure"
 import { buildToolbar, insertPageBreak, insertHardBreak } from "./toolbar"
 import { buildPrintPreviewButtons } from "./printPreview"
 import { createDevPanel } from "./devPanel"
+import { installApiMeter } from "./apiMeter"
 import "./styles.css"
 
 // Paragraphs and headings are measured with Pretext; ?measure=dom reads them from the DOM instead.
@@ -21,10 +22,22 @@ const measurer: Measurer = params.get("measure") === "dom" ? "dom" : "pretext"
 const langParam = params.get("lang") ?? ""
 const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 
+// Count costly browser calls in each pagination pass, for the dev panel.
+installApiMeter()
+
 const paperHost = document.getElementById("paper")!
 const panel = createDevPanel(document.getElementById("panel")!)
 
 let toolbar: { sync: () => void } | null = null
+
+// The last 200 pass reports, for tests: a pass runs per transaction, so an
+// action of several keystrokes spans several passes.
+const reflows: ReflowReport[] = []
+const onReflow = (r: ReflowReport) => {
+  reflows.push(r)
+  if (reflows.length > 200) reflows.shift()
+  panel.report(r)
+}
 
 const view = new EditorView(paperHost, {
   state: EditorState.create({
@@ -39,7 +52,7 @@ const view = new EditorView(paperHost, {
         "Shift-Enter": insertHardBreak,
       }),
       keymap(baseKeymap),
-      paginationPlugin({ onReflow: (r) => panel.report(r), measurer }),
+      paginationPlugin({ onReflow, measurer }),
     ],
   }),
   dispatchTransaction(tr: Transaction) {
@@ -58,10 +71,17 @@ panel.attach(view)
   // (also used by tests/e2e.mjs to verify widget placement against the doc —
   // the key is how it reads the pagination state out of the built bundle).
   ; (window as unknown as {
-    __pager: { view: EditorView; key: typeof paginationKey; measurer: Measurer; compareWithDom: () => ReturnType<typeof compareWithDom> }
+    __pager: {
+      view: EditorView
+      key: typeof paginationKey
+      measurer: Measurer
+      reflows: ReflowReport[]
+      compareWithDom: () => ReturnType<typeof compareWithDom>
+    }
   }).__pager = {
     view,
     key: paginationKey,
+    reflows,
     get measurer() {
       return paginationKey.getState(view.state)!.measurer
     },
@@ -116,7 +136,7 @@ function languageSelect(): HTMLSelectElement {
 
 // Heights can change without the document changing: fonts settling, images
 // loading, the window resizing. Each triggers a full re-measure through a
-// meta-transaction; the pass itself stays debounced and idempotent.
+// meta-transaction; the pass itself stays idempotent.
 if (typeof document !== "undefined" && "fonts" in document) {
   document.fonts.ready.then(() => requestFullRecompute(view))
 }

@@ -1,7 +1,7 @@
 /**
  * Transient-state probe v2: delete the content before/after a straddling
  * paragraph's widget via a real PM transaction, then probe what measureBlock
- * would compute BEFORE the debounced pass runs, and compare with the layout
+ * would compute BEFORE the next pass runs, and compare with the layout
  * after the pass and after a forced full re-run.
  */
 import { spawn } from "node:child_process"
@@ -144,7 +144,7 @@ const runCase = async (label, from, to) => {
   console.log("  [transient, pre-pass]")
   console.log(summarize(await probe()))
   await sleep(700)
-  console.log("  [after debounced pass] breaks:", JSON.stringify(await breaks()))
+  console.log("  [after the pass] breaks:", JSON.stringify(await breaks()))
   console.log(summarize(await probe()))
   await page.evaluate(() => [...document.querySelectorAll(".panel-buttons button")][0].click())
   await sleep(800)

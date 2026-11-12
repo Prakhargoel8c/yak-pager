@@ -18,6 +18,7 @@
  * the other, so at most one panel body is visible at a time. The head of each
  * card (title plus arrow button) is permanent DOM; only the body re-renders.
  */
+import { API_KIND } from "./apiMeter"
 import type { EditorView } from "prosemirror-view"
 import type { Node as PMNode } from "prosemirror-model"
 import { NodeSelection, TextSelection } from "prosemirror-state"
@@ -38,6 +39,15 @@ const OP_STYLES: Record<string, string> = {
   create: "op-create",
   remove: "op-remove",
   other: "op-other",
+}
+
+/** Calls in a pass that can force layout or style, measure and apply together. */
+function layoutReads(r: ReflowReport): number {
+  let n = 0
+  for (const calls of [r.apiCalls.measure, r.apiCalls.apply]) {
+    for (const [name, count] of Object.entries(calls)) if (API_KIND[name] === "layout") n += count
+  }
+  return n
 }
 
 export function createDevPanel(mount: HTMLElement): DevPanel {
@@ -73,6 +83,23 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
           <div><span class="k">reflow</span><span class="v">${r.durationMs.toFixed(2)} ms</span></div>
           <div><span class="k">measured</span><span class="v">${r.measuredCount}/${r.totalBlocks}${r.fullRecompute ? " (full)" : ""}</span></div>
         </div>`)
+      const ms = (n: number) => n.toFixed(2)
+      parts.push(
+        `<div class="phases"><span class="k">phases</span>measure ${ms(r.phaseMs.measure)} · solve ${ms(r.phaseMs.solve)} · apply ${ms(r.phaseMs.apply)} ms</div>`
+      )
+      // Costly browser calls the pass made: red forces layout or style,
+      // amber shapes or segments text.
+      const apiChips = (calls: Record<string, number>) => {
+        const entries = Object.entries(calls).sort((a, b) => b[1] - a[1])
+        if (entries.length === 0) return `<span class="api-chip api-none">none</span>`
+        return entries
+          .map(([name, n]) => `<span class="api-chip api-${API_KIND[name] ?? "layout"}">${name} ×${n}</span>`)
+          .join("")
+      }
+      parts.push(
+        `<div class="apis"><span class="k">browser APIs · measure</span><div class="chips">${apiChips(r.apiCalls.measure)}</div></div>` +
+          `<div class="apis"><span class="k">browser APIs · apply</span><div class="chips">${apiChips(r.apiCalls.apply)}</div></div>`
+      )
       const breaks = r.breakPositions
         .map((p, i) => `@${p} (ragged ${r.remainders[i]}px)`)
         .join("<br>") || "<i>none — one page</i>"
@@ -265,7 +292,7 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
     },
     report(r) {
       history.push(
-        `#${r.pass} · ${r.pageCount}p · ${r.durationMs.toFixed(1)}ms · measured ${r.measuredCount}/${r.totalBlocks}`
+        `#${r.pass} · ${r.pageCount}p · ${r.durationMs.toFixed(1)}ms · measured ${r.measuredCount}/${r.totalBlocks} · layout reads ${layoutReads(r)}`
       )
       render(r)
     },
