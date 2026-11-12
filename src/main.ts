@@ -6,10 +6,15 @@ import { baseKeymap } from "prosemirror-commands"
 import { history, undo, redo } from "prosemirror-history"
 import { buildSeedDoc } from "./seed"
 import { paginationPlugin, paginationKey, requestFullRecompute } from "./paginationPlugin"
+import type { Measurer } from "./paginationPlugin"
+import { compareWithDom } from "./pretextMeasure"
 import { buildToolbar, insertPageBreak, insertHardBreak } from "./toolbar"
 import { buildPrintPreviewButtons } from "./printPreview"
 import { createDevPanel } from "./devPanel"
 import "./styles.css"
+
+// ?measure=pretext measures paragraphs and headings with Pretext instead of the DOM.
+const measurer: Measurer = new URLSearchParams(location.search).get("measure") === "pretext" ? "pretext" : "dom"
 
 const paperHost = document.getElementById("paper")!
 const panel = createDevPanel(document.getElementById("panel")!)
@@ -29,7 +34,7 @@ const view = new EditorView(paperHost, {
         "Shift-Enter": insertHardBreak,
       }),
       keymap(baseKeymap),
-      paginationPlugin({ onReflow: (r) => panel.report(r) }),
+      paginationPlugin({ onReflow: (r) => panel.report(r), measurer }),
     ],
   }),
   dispatchTransaction(tr: Transaction) {
@@ -46,9 +51,13 @@ panel.attach(view)
   // Poke at the editor from the console: window.__pager.view.state.doc, ...
   // (also used by tests/e2e.mjs to verify widget placement against the doc —
   // the key is how it reads the pagination state out of the built bundle).
-  ; (window as unknown as { __pager: { view: EditorView; key: typeof paginationKey } }).__pager = {
+  ; (window as unknown as {
+    __pager: { view: EditorView; key: typeof paginationKey; measurer: Measurer; compareWithDom: () => ReturnType<typeof compareWithDom> }
+  }).__pager = {
     view,
     key: paginationKey,
+    measurer,
+    compareWithDom: () => compareWithDom(view),
   }
 
 // Heights can change without the document changing: fonts settling, images

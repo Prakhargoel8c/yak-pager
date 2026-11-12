@@ -34,6 +34,8 @@ import { solve } from "./solver"
 import type { SplitCandidate } from "./solver"
 import { CONTENT_H, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
 import { measureBlock } from "./measure"
+import { editorContentWidth, measureWithPretext } from "./pretextMeasure"
+import { clearCache as clearPretextCache } from "@chenglou/pretext"
 import type { MeasuredBlock } from "./measure"
 
 export interface BreakInfo {
@@ -126,7 +128,17 @@ function unionRange(
 /* The plugin                                                          */
 /* ------------------------------------------------------------------ */
 
-export function paginationPlugin(options: { onReflow?: (report: ReflowReport) => void } = {}) {
+/**
+ * "dom" reads every block's layout from the DOM (measure.ts). "pretext"
+ * computes paragraphs and headings with Pretext (pretextMeasure.ts) and
+ * reads only the blocks it can't model from the DOM.
+ */
+export type Measurer = "dom" | "pretext"
+
+export function paginationPlugin(
+  options: { onReflow?: (report: ReflowReport) => void; measurer?: Measurer } = {}
+) {
+  const usePretext = options.measurer === "pretext"
   // Per-editor resources shared by state.apply and the view code below.
   // The widget pool is what "the single reused page-gap widget" means
   // concretely: element i is created once and re-inserted forever after.
@@ -390,11 +402,15 @@ export function paginationPlugin(options: { onReflow?: (report: ReflowReport) =>
         if (!full && state.dirty == null && passCount > 0) return
         createdThisPass.clear()
         const t0 = performance.now()
+        // A full pass follows fonts loading or a resize: widths Pretext
+        // measured before a font loaded are the fallback font's.
+        if (full && usePretext) clearPretextCache()
 
         // -------- (a) MEASURE: batched DOM reads, then nothing but reads --
         // All getBoundingClientRect calls happen before any write, so the
         // browser performs layout once, not interleaved read/write cycles.
         const blockEls = topBlockElements(view.dom)
+        const contentWidth = usePretext ? editorContentWidth(view) : 0
         const blocks: { pos: number; end: number; height: number; forced: boolean; splitCandidates?: SplitCandidate[] }[] = []
         let measured = 0
         let i = 0
@@ -408,7 +424,7 @@ export function paginationPlugin(options: { onReflow?: (report: ReflowReport) =>
           if (full || m === undefined || inDirty) {
             // getBoundingClientRect().height, not offsetHeight: offsetHeight
             // rounds to integers and the error accumulates across a page.
-            m = measureBlock(view, el, node, contentStart)
+            m = (usePretext ? measureWithPretext(node, contentWidth) : null) ?? measureBlock(view, el, node, contentStart)
             cache.set(node, m)
             measured++
           }
