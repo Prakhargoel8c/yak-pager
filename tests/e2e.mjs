@@ -68,6 +68,14 @@ const chips1 = await readChips()
 ok(stats1.pages >= 4, `seed spans 4+ pages`, `pages=${stats1.pages}`)
 ok((chips1.other ?? 0) === 0, "no unexpected DOM mutations", `other=${chips1.other}`)
 ok((chips1.create ?? 0) > 0, "gap widgets created once at startup", `create=${chips1.create}`)
+// The print document lays text out in 816 - 2 x 96 = 624px; a wider screen
+// column wraps lines differently and print pages stop matching the screen.
+const column = await page.evaluate(() => {
+  const ed = window.__pager.view.dom
+  const cs = getComputedStyle(ed)
+  return ed.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+})
+ok(column === 624, "editor column is 624px, the print column", `column=${column}`)
 
 console.log("— idempotence: force full re-measure of stable layout")
 const before = await page.evaluate(() => document.querySelector(".paper-stack")?.innerHTML.length)

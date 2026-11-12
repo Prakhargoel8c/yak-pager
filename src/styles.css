@@ -76,7 +76,11 @@ body {
 }
 
 .paper-stack {
-  width: 832px; /* 816 + 2 x BLEED */
+  /* Content box = one 816px sheet, so the editor's 96px side padding leaves
+     the same 624px column print uses. The 8px side padding is the tile's
+     bleed: the 832px tile is painted from the padding edge, so its sheet
+     starts exactly at the content edge. */
+  width: 816px;
   margin: 24px auto;
   padding: 104px 8px 0; /* top = MARGIN + BLEED; JS sets padding-bottom */
   box-sizing: content-box;
