@@ -11,6 +11,8 @@ import hi from "./seed-text/hi.json"
 import ml from "./seed-text/ml.json"
 import kn from "./seed-text/kn.json"
 import { splitKrutiRuns } from "./kruti"
+import { FONTS } from "./fonts"
+import type { FontKey } from "./fonts"
 
 const m = {
   strong: () => schema.marks.strong.create(),
@@ -18,16 +20,22 @@ const m = {
   size: (px: number) => schema.marks.fontSize.create({ size: px }),
 }
 
-/** The editor's own font, for the Latin runs inside a Kruti Dev document. */
-export const LATIN_FAMILY = 'Georgia, "Times New Roman", serif'
-
-/** Set while building a Kruti Dev document: text is re-encoded, Latin runs keep LATIN_FAMILY. */
+/**
+ * How text() writes the seed's words: the document's base font, and whether
+ * Hindi is re-encoded for Kruti Dev. Re-encoded text is split into Kruti
+ * Dev runs and Latin runs (Georgia); a run whose font isn't the base font
+ * gets a fontFamily mark.
+ */
+let base: FontKey = "georgia"
 let kruti = false
 
 function text(str: string, marks: Mark[] = []): Node[] {
   if (!kruti) return [schema.text(str, marks)]
-  const latin = schema.marks.fontFamily.create({ family: LATIN_FAMILY })
-  return splitKrutiRuns(str).map((r) => schema.text(r.text, r.kruti ? marks : latin.addToSet(marks)))
+  return splitKrutiRuns(str).map((r) => {
+    const font: FontKey = r.kruti ? "kruti" : "georgia"
+    const runMarks = font === base ? marks : schema.marks.fontFamily.create({ family: FONTS[font].family }).addToSet(marks)
+    return schema.text(r.text, runMarks)
+  })
 }
 
 function heading(level: 1 | 2 | 3, str: string) {
@@ -55,18 +63,27 @@ export interface SeedText {
   afterBreak: { title: string; paras: string[]; subtitle: string; subParas: string[] }
 }
 
-export const LANGUAGES: Record<string, { label: string; text: SeedText; font?: "kruti" }> = {
-  en: { label: "English", text: en as SeedText },
-  hi: { label: "हिन्दी (Kruti Dev)", text: hi as SeedText, font: "kruti" },
-  "hi-unicode": { label: "हिन्दी (Unicode)", text: hi as SeedText },
-  ml: { label: "മലയാളം", text: ml as SeedText },
-  kn: { label: "ಕನ್ನಡ", text: kn as SeedText },
+/**
+ * `font` is the document's base font; `kruti` re-encodes the Hindi for Kruti
+ * Dev. "mixed" interleaves the English seed with the Hindi one in Kruti Dev
+ * on a Georgia document.
+ */
+export const LANGUAGES: Record<string, { label: string; text: SeedText; font: FontKey; kruti?: boolean }> = {
+  en: { label: "English", text: en as SeedText, font: "georgia" },
+  hi: { label: "हिन्दी (Kruti Dev)", text: hi as SeedText, font: "kruti", kruti: true },
+  "hi-unicode": { label: "हिन्दी (Unicode)", text: hi as SeedText, font: "georgia" },
+  mixed: { label: "English + Kruti Dev", text: en as SeedText, font: "georgia", kruti: true },
+  ml: { label: "മലയാളം (Gayathri)", text: ml as SeedText, font: "gayathri" },
+  kn: { label: "ಕನ್ನಡ", text: kn as SeedText, font: "georgia" },
 }
 export type Language = keyof typeof LANGUAGES
 
 export function buildSeedDoc(lang: Language = "en"): Node {
+  const { font } = LANGUAGES[lang]
+  base = font
+  kruti = LANGUAGES[lang].kruti ?? false
+  if (lang === "mixed") return buildMixedDoc()
   const t = LANGUAGES[lang].text
-  kruti = LANGUAGES[lang].font === "kruti"
   const children: Node[] = []
 
   children.push(
@@ -92,5 +109,34 @@ export function buildSeedDoc(lang: Language = "en"): Node {
     ...t.afterBreak.subParas.map((p) => para(p))
   )
 
-  return schema.nodes.doc.create(null, children)
+  return schema.nodes.doc.create({ font }, children)
+}
+
+/**
+ * English and Hindi in Kruti Dev in one Georgia document: each English
+ * paragraph is followed by its Hindi counterpart, headings carry both, and
+ * the Hindi keeps its own Latin words in Georgia, so lines mix the fonts.
+ */
+function buildMixedDoc(): Node {
+  const e = en as SeedText
+  const h = hi as SeedText
+  const plain = (str: string, marks: Mark[] = []) => [schema.text(str, marks)]
+  const both = (level: 1 | 2 | 3, a: string, b: string) =>
+    schema.nodes.heading.create({ level }, [...plain(a + " · "), ...text(b)])
+  const children: Node[] = [
+    both(1, e.title, h.title),
+    para(plain(e.intro[0]), plain(e.intro[1], [m.strong()]), plain(e.intro[2]), plain(e.intro[3], [m.em()]), plain(e.intro[4])),
+    para(text(h.intro[0]), text(h.intro[1], [m.strong()]), text(h.intro[2]), text(h.intro[3], [m.em()]), text(h.intro[4])),
+    para(plain(e.fontSize[0]), text(h.fontSize[1], [m.size(20)]), plain(e.fontSize[2])),
+    schema.nodes.paragraph.create({ align: "justify" }, [...plain(e.justified + " "), ...text(h.justified)]),
+    schema.nodes.horizontal_rule.create(),
+  ]
+  e.sections.forEach((section, i) => {
+    children.push(both(2, section.title, h.sections[i].title))
+    section.paras.forEach((p, j) => {
+      children.push(para(plain(p)))
+      if (h.sections[i].paras[j]) children.push(para(text(h.sections[i].paras[j])))
+    })
+  })
+  return schema.nodes.doc.create({ font: "georgia" }, children)
 }

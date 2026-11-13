@@ -13,13 +13,16 @@ import { buildToolbar, insertPageBreak, insertHardBreak } from "./toolbar"
 import { buildPrintPreviewButtons } from "./printPreview"
 import { createDevPanel } from "./devPanel"
 import { installApiMeter } from "./apiMeter"
+import { FONTS, isFontKey } from "./fonts"
+import type { FontKey } from "./fonts"
 import "./styles.css"
 
 // Paragraphs and headings are measured with Pretext; ?measure=dom reads them from the DOM instead.
 const params = new URLSearchParams(location.search)
 const measurer: Measurer = params.get("measure") === "dom" ? "dom" : "pretext"
-// ?lang=hi|hi-unicode|ml|kn loads the seed document in Hindi (Kruti Dev or
-// Unicode), Malayalam or Kannada; English otherwise.
+// ?lang=hi|hi-unicode|mixed|ml|kn loads the seed document in Hindi (Kruti
+// Dev or Unicode), English mixed with Kruti Dev, Malayalam (Gayathri) or
+// Kannada; English otherwise.
 const langParam = params.get("lang") ?? ""
 const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 
@@ -27,13 +30,6 @@ const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 installApiMeter()
 
 const paperHost = document.getElementById("paper")!
-let currentLang = lang
-const setFont = (l: Language) => {
-  currentLang = l
-  if (LANGUAGES[l].font) paperHost.dataset.font = LANGUAGES[l].font
-  else delete paperHost.dataset.font
-}
-setFont(lang)
 const panel = createDevPanel(document.getElementById("panel")!)
 
 let toolbar: { sync: () => void } | null = null
@@ -63,12 +59,15 @@ const view = new EditorView(paperHost, {
       paginationPlugin({ onReflow, measurer }),
     ],
   }),
-  // Kruti Dev text is ASCII underneath ("fd" is कि): spellcheck would flag
-  // every word and autocorrect would rewrite keystrokes.
-  attributes: (): Record<string, string> =>
-    LANGUAGES[currentLang].font === "kruti"
-      ? { spellcheck: "false", autocorrect: "off", autocapitalize: "off" }
-      : {},
+  // The document's base font is its doc node's `font` attr. Kruti Dev text
+  // is ASCII underneath ("fd" is कि): spellcheck would flag every word and
+  // autocorrect would rewrite keystrokes.
+  attributes: (state): Record<string, string> => {
+    const font: FontKey = isFontKey(state.doc.attrs.font) ? state.doc.attrs.font : "georgia"
+    const attrs: Record<string, string> = { style: `font-family: ${FONTS[font].family}` }
+    if (font === "kruti") Object.assign(attrs, { spellcheck: "false", autocorrect: "off", autocapitalize: "off" })
+    return attrs
+  },
   dispatchTransaction(tr: Transaction) {
     view.updateState(view.state.apply(tr))
     toolbar?.sync()
@@ -139,7 +138,6 @@ function languageSelect(): HTMLSelectElement {
     else url.searchParams.set("lang", next)
     window.history.replaceState(null, "", url)
     const current = paginationKey.getState(view.state)!.measurer
-    setFont(next)
     view.updateState(EditorState.create({ doc: buildSeedDoc(next), plugins: view.state.plugins }))
     setMeasurer(view, current)
     toolbar?.sync()

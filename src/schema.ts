@@ -19,7 +19,10 @@ import { Schema } from "prosemirror-model"
 import type { Node, Mark, DOMOutputSpec } from "prosemirror-model"
 import { nodes as basicNodes, marks as basicMarks } from "prosemirror-schema-basic"
 
-const { doc, text, hard_break, horizontal_rule } = basicNodes
+const { text, hard_break, horizontal_rule } = basicNodes
+
+/** The document's base font (a key of FONTS in fonts.ts), applied to the whole editor. */
+const doc = { ...basicNodes.doc, attrs: { font: { default: "georgia" } } }
 const { strong, em } = basicMarks
 
 const ALIGN_VALUES = ["left", "center", "right", "justify"]
@@ -104,12 +107,15 @@ const fontSize = {
   },
 }
 
-/** fontFamily mark: a CSS font-family list, rendered as an inline style. Not inclusive. */
+/**
+ * fontFamily mark: a run in a font other than the document's, as a CSS
+ * font-family list rendered as an inline style. Inclusive, as in a word
+ * processor: typing on from a run keeps its font, and the font dropdown
+ * switches it. Spellcheck is off in Kruti Dev runs, whose text is ASCII
+ * underneath.
+ */
 const fontFamily = {
   attrs: { family: {} },
-  // Typing at the end of a Latin run in a Kruti Dev document is Kruti Dev
-  // again, not a continuation of the run.
-  inclusive: false,
   parseDOM: [
     {
       tag: "span[style]",
@@ -121,7 +127,10 @@ const fontFamily = {
     },
   ],
   toDOM(mark: Mark): DOMOutputSpec {
-    return ["span", { style: `font-family: ${mark.attrs.family}` }]
+    const family = mark.attrs.family as string
+    const attrs: Record<string, string> = { style: `font-family: ${family}` }
+    if (/^["']?Kruti Dev/i.test(family)) attrs.spellcheck = "false"
+    return ["span", attrs]
   },
 }
 

@@ -114,15 +114,12 @@ body {
   caret-color: var(--accent);
 }
 
-/* Hindi documents in Kruti Dev 010 (src/kruti.ts re-encodes the text);
-   Latin runs carry a fontFamily mark back to Georgia. */
+/* Kruti Dev 010 for Hindi (src/kruti.ts re-encodes the text). A document's
+   base font is set on the editor from its doc node's font attr (main.ts);
+   runs in another font carry a fontFamily mark. */
 @font-face {
   font-family: "Kruti Dev";
   src: url("/fonts/krutidev-010-regular.ttf") format("truetype");
-}
-
-#paper[data-font="kruti"] .ProseMirror {
-  font-family: "Kruti Dev", Georgia, "Times New Roman", serif;
 }
 
 #paper .ProseMirror > * {
