@@ -10,10 +10,59 @@
 import type { EditorView } from "prosemirror-view"
 import { toggleMark, setBlockType } from "prosemirror-commands"
 import type { Command } from "prosemirror-state"
-import type { Node } from "prosemirror-model"
+import type { Mark, Node } from "prosemirror-model"
+import type { EditorState } from "prosemirror-state"
 import { schema } from "./schema"
+import { FONTS, fontKeyOf, isFontKey } from "./fonts"
+import type { FontKey } from "./fonts"
 
-const { strong, em, fontSize } = schema.marks
+const { strong, em, fontSize, fontFamily } = schema.marks
+
+/** The document's base font, from its doc node. */
+export const docFont = (state: EditorState): FontKey =>
+  isFontKey(state.doc.attrs.font) ? state.doc.attrs.font : "georgia"
+
+/**
+ * The font at the cursor, read from the content: the text's fontFamily
+ * mark, else the document's base font. Over a selection, the one font all
+ * its text shares, or "mixed". "other" is a family not in FONTS (pasted).
+ */
+export function fontAt(state: EditorState): FontKey | "mixed" | "other" {
+  const base = docFont(state)
+  const of = (marks: readonly Mark[]) => {
+    const m = fontFamily.isInSet(marks)
+    return m ? (fontKeyOf(m.attrs.family as string) ?? "other") : base
+  }
+  const { selection, storedMarks } = state
+  if (selection.empty) return of(storedMarks ?? selection.$from.marks())
+  const seen = new Set<string>()
+  state.doc.nodesBetween(selection.from, selection.to, (node) => {
+    if (node.isText) seen.add(of(node.marks))
+  })
+  if (seen.size === 0) return base
+  return seen.size === 1 ? ([...seen][0] as FontKey | "other") : "mixed"
+}
+
+/**
+ * Sets the font of the selection, or of what is typed next. The document's
+ * base font is no mark at all, so choosing it removes the fontFamily mark.
+ */
+export function setFont(font: FontKey): Command {
+  return (state, dispatch) => {
+    const { from, to, empty } = state.selection
+    const tr = state.tr
+    const mark = font === docFont(state) ? null : fontFamily.create({ family: FONTS[font].family })
+    if (empty) {
+      tr.removeStoredMark(fontFamily)
+      if (mark) tr.addStoredMark(mark)
+    } else {
+      tr.removeMark(from, to, fontFamily)
+      if (mark) tr.addMark(from, to, mark)
+    }
+    dispatch?.(tr)
+    return true
+  }
+}
 
 /**
  * Set text alignment on every block in the selection that carries the
@@ -128,6 +177,21 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
     run(setFontSize(v === "" ? null : Number(v)))()
   }
 
+  const fontSel = document.createElement("select")
+  fontSel.title = "Font"
+  fontSel.className = "font-select"
+  for (const [key, font] of Object.entries(FONTS)) fontSel.append(new Option(font.label, key))
+  // Shown, not chosen: the selection holds several fonts, or one not listed.
+  for (const [value, label] of [["mixed", "Mixed fonts"], ["other", "Other font"]]) {
+    const o = new Option(label, value)
+    o.disabled = true
+    o.hidden = true
+    fontSel.append(o)
+  }
+  fontSel.onchange = () => {
+    if (isFontKey(fontSel.value)) run(setFont(fontSel.value))()
+  }
+
   const blockSel = document.createElement("select")
   blockSel.title = "Block type"
   const blockOptions: Array<[string, Command]> = [
@@ -166,7 +230,7 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
   hint.className = "tb-hint"
   hint.textContent = "Ctrl/⌘-Z undoes typing — pagination is never in the undo stack"
 
-  mount.append(strongBtn, emBtn, sizeSel, blockSel, alignSel, pbBtn, hint)
+  mount.append(strongBtn, emBtn, fontSel, sizeSel, blockSel, alignSel, pbBtn, hint)
 
   const sync = () => {
     const { state } = view
@@ -177,6 +241,7 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
     emBtn.classList.toggle("active", range ? state.doc.rangeHasMark(selection.from, selection.to, em) : em.isInSet(marksAt) != null)
     const fs = fontSize.isInSet(marksAt)
     sizeSel.value = fs ? String(fs.attrs.size) : ""
+    fontSel.value = fontAt(state)
     const parent = selection.$from.parent
     blockSel.value =
       parent.type.name === "heading" ? `Heading ${parent.attrs.level}` : "Paragraph"

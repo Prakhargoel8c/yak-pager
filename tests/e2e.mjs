@@ -498,8 +498,12 @@ const acrossBreak = await page.evaluate(() => {
   return { dom, doc, numbers: [...view.dom.querySelectorAll(".gap-num")].map((n) => n.textContent).join("") }
 })
 ok(acrossBreak.numbers === "", "page numbers have no text in the DOM", JSON.stringify(acrossBreak.numbers))
+// From the first space to the last on both sides: the ±40 ends can fall
+// inside a grapheme cluster (a Malayalam vowel sign), which the browser's
+// selection snaps to a whole cluster.
+const words = (t) => t.slice(t.indexOf(" "), t.lastIndexOf(" ")).trim()
 ok(
-  acrossBreak.dom.trim() === acrossBreak.doc.trim(),
+  words(acrossBreak.dom) === words(acrossBreak.doc),
   "a selection across the first break selects only the document's text",
   `dom=${JSON.stringify(acrossBreak.dom)} doc=${JSON.stringify(acrossBreak.doc)}`
 )

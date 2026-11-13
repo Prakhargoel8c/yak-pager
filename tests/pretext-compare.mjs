@@ -51,6 +51,8 @@ try {
       const host = document.createElement("div")
       host.className = "ProseMirror"
       host.style.cssText = `position:absolute;visibility:hidden;top:0;left:0;box-sizing:border-box;width:${view.dom.getBoundingClientRect().width}px`
+      // The document's font is an inline style on the editor (its doc attr).
+      host.style.fontFamily = getComputedStyle(view.dom).fontFamily
       document.getElementById("paper").append(host)
       for (const d of result.diffs) {
         const pretext = new Map((d.pretext.splitCandidates ?? []).map((s) => [s.pos, s.height]))
@@ -170,81 +172,164 @@ try {
   await sleep(600)
   await report("seed + stress + Indic blocks")
 
-  console.log("— Hindi seed in Kruti Dev")
-  await page.goto("http://localhost:4180/?lang=hi", { waitUntil: "networkidle0" })
-  await page.evaluate(() => document.fonts.load('16px "Kruti Dev"'))
-  await sleep(1200)
-  const family = await page.evaluate(() => getComputedStyle(window.__pager.view.dom).fontFamily)
-  if (!/^"?Kruti Dev"?,/.test(family)) {
-    console.log(`  ✗ editor font is ${family}`)
-    failures++
-  }
-  await report("Kruti Dev seed")
-
-  console.log("— typing in Kruti Dev")
-  // A Kruti Dev user types ASCII on a Kruti keyboard layout ("fd" is कि),
-  // plus a few non-ASCII keys (Ã, ¡, ±). Type a seed paragraph's own text,
-  // keystroke by keystroke and fast, into a new paragraph mid-document, then
-  // more at the end of an English run.
-  const typed = await page.evaluate(() => {
-    const { view } = window.__pager
-    let source = ""
-    view.state.doc.forEach((n) => {
-      if (!source && n.type.name === "paragraph" && n.textContent.length > 300 && !n.content.content.some((c) => c.marks.length)) source = n.textContent
-    })
-    return source.slice(0, 400)
-  })
   const check = (ok, label, detail = "") => {
     console.log(`  ${ok ? "✓" : "✗"} ${label}${detail ? `  — ${detail}` : ""}`)
     if (!ok) failures++
   }
-  check(
-    await page.evaluate(() => window.__pager.view.dom.getAttribute("spellcheck") === "false"),
-    "spellcheck is off in a Kruti Dev document"
-  )
-  await page.evaluate(() => {
-    const { view } = window.__pager
-    const p = [...view.dom.querySelectorAll(":scope > p")][8]
-    const r = document.createRange()
-    r.selectNodeContents(p)
-    r.collapse(false)
-    getSelection().removeAllRanges()
-    getSelection().addRange(r)
-    view.focus()
+  // Web fonts load when text first uses them; wait for them, and for the
+  // full re-measure their loading triggers.
+  const open = async (query) => {
+    await page.goto(`http://localhost:4180/${query}`, { waitUntil: "networkidle0" })
+    await page.evaluate(() => Promise.all([document.fonts.load('16px "Kruti Dev"'), document.fonts.load("16px Gayathri", "മ")]))
+    await sleep(1200)
+  }
+  const editorFont = () => page.evaluate(() => getComputedStyle(window.__pager.view.dom).fontFamily)
+  const fontSelect = () => page.evaluate(() => document.querySelector(".font-select").value)
+  /** Puts the cursor (or a selection to `to`) at document positions, then lets the toolbar sync. */
+  const select = (from, to = from) =>
+    page.evaluate(([from, to]) => {
+      const { view } = window.__pager
+      const sel = view.state.selection.constructor.create(view.state.doc, from, to)
+      view.dispatch(view.state.tr.setSelection(sel))
+      view.focus()
+    }, [from, to])
+  /** The position at the end of the nth top-level paragraph. */
+  const endOfParagraph = (nth) =>
+    page.evaluate((nth) => {
+      let k = 0, at = null
+      window.__pager.view.state.doc.forEach((node, offset) => {
+        if (node.type.name === "paragraph" && k++ === nth) at = offset + node.nodeSize - 1
+      })
+      return at
+    }, nth)
+  /** Start and end of the first text run with (or without) a fontFamily mark, at least 4 characters. */
+  const run = (marked) =>
+    page.evaluate((marked) => {
+      let at = null
+      window.__pager.view.state.doc.descendants((n, pos) => {
+        if (at === null && n.isText && n.text.trim().length > 3 && n.marks.some((m) => m.type.name === "fontFamily") === marked) at = [pos, pos + n.nodeSize]
+      })
+      return at
+    }, marked)
+
+  console.log("— switching to a web font from the language menu")
+  // First of the Kruti Dev stages, so the font is not in the browser yet.
+  // The first pass after the switch runs before Kruti Dev has loaded, so it
+  // measures in the fallback font; the full pass the font load triggers must
+  // drop those widths and line boxes. A direct ?lang=hi load is the reference.
+
+  await page.goto("http://localhost:4180/", { waitUntil: "networkidle0" })
+  await sleep(800)
+  await page.select('select[title="Document language"]', "hi")
+  await page.evaluate(() => document.fonts.load('16px "Kruti Dev"'))
+  await sleep(1200)
+  const switched = await page.evaluate(() => ({
+    breaks: window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos),
+    full: window.__pager.reflows.some((r) => r.fullRecompute),
+  }))
+  check(switched.full, "a font load runs a full re-measure")
+  await report("Kruti Dev via the language menu")
+  await open("?lang=hi")
+  const directHi = await page.evaluate(() => window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos))
+  check(JSON.stringify(switched.breaks) === JSON.stringify(directHi), "same page breaks as loading ?lang=hi directly", `menu ${JSON.stringify(switched.breaks)} direct ${JSON.stringify(directHi)}`)
+
+
+  console.log("— Hindi seed in Kruti Dev")
+  await open("?lang=hi")
+  const family = await editorFont()
+  check(/^"?Kruti Dev"?,/.test(family), "the document's font is Kruti Dev (doc attr)", family)
+  await report("Kruti Dev seed")
+
+  console.log("— font dropdown")
+  const latin = await run(true)
+  const krutiRun = await run(false)
+  await select(krutiRun[0] + 1)
+  check((await fontSelect()) === "kruti", "cursor in Kruti Dev text reads Kruti Dev", await fontSelect())
+  await select(latin[0] + 1)
+  check((await fontSelect()) === "georgia", "cursor in an English run reads Georgia", await fontSelect())
+  await select(Math.min(krutiRun[0], latin[0]), Math.max(krutiRun[1], latin[1]))
+  check((await fontSelect()) === "mixed", "a selection over both reads Mixed fonts", await fontSelect())
+
+  console.log("— typing in Kruti Dev")
+  // A Kruti Dev user types ASCII on a Kruti keyboard layout ("fd" is कि),
+  // plus a few non-ASCII keys (Ã, ¡, ±). Type a seed paragraph's own text,
+  // keystroke by keystroke and fast, into a new paragraph mid-document.
+  const typed = await page.evaluate(() => {
+    let source = ""
+    window.__pager.view.state.doc.descendants((n) => {
+      if (n.isText && !n.marks.length && source.length < 400) source += n.text
+    })
+    return source.slice(0, 400)
   })
+  check(typed.length === 400, "found 400 characters of Kruti Dev text to type", `${typed.length}`)
+  check(await page.evaluate(() => window.__pager.view.dom.getAttribute("spellcheck") === "false"), "spellcheck is off in a Kruti Dev document")
+  await select(await endOfParagraph(8))
   await page.keyboard.press("Enter")
   await page.keyboard.type(typed)
-  // The end of an English run (a fontFamily mark): typing there is Kruti Dev.
-  const runEnd = await page.evaluate(() => {
-    const { view } = window.__pager
-    let at = null
-    view.state.doc.descendants((n, pos) => {
-      if (at === null && n.isText && n.marks.some((m) => m.type.name === "fontFamily") && n.text.trim().length > 3) at = pos + n.nodeSize
-    })
-    const span = view.domAtPos(at)
-    const r = document.createRange()
-    r.setStart(span.node, span.offset)
-    getSelection().removeAllRanges()
-    getSelection().addRange(r)
-    view.focus()
-    return at
-  })
-  await page.keyboard.type("dk;Z ")
-  await sleep(600)
-  const marks = await page.evaluate(() => {
-    let found = null
-    window.__pager.view.state.doc.descendants((n) => {
-      if (!found && n.isText && n.text.includes("dk;Z ")) found = { text: n.text.slice(0, 40), marks: n.marks.map((m) => m.type.name) }
-    })
-    return found ?? { text: null, marks: [] }
-  })
-  check(marks.text !== null && !marks.marks.includes("fontFamily"), "text typed after an English run is Kruti Dev, not Georgia", JSON.stringify(marks))
   const typedFamily = await page.evaluate((text) => {
-    const p = [...document.querySelectorAll(".ProseMirror > p")].find((el) => el.textContent === text)
-    return p ? getComputedStyle(p).fontFamily : null
+    const p = [...document.querySelectorAll(".ProseMirror > p")].find((el) => el.textContent.startsWith(text.slice(0, 40)))
+    if (!p) return null
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT)
+    const first = walker.nextNode()
+    return `${getComputedStyle(first.parentElement).fontFamily} | ${p.textContent.length}/${text.length} chars`
   }, typed)
   check(/^"?Kruti Dev"?,/.test(typedFamily ?? ""), "the typed paragraph renders in Kruti Dev", typedFamily ?? "paragraph not found")
+  // Typing on from an English run stays English (the mark is inclusive, as
+  // in a word processor); choosing Kruti Dev in the dropdown switches.
+  const latinNow = await run(true)
+  await select(latinNow[1])
+  await page.keyboard.type("on ")
+  await page.select(".font-select", "kruti")
+  await page.keyboard.type("dk;Z ")
+  await sleep(600)
+  const runs = await page.evaluate(() => {
+    const out = {}
+    window.__pager.view.state.doc.descendants((n) => {
+      if (n.isText) for (const t of ["on ", "dk;Z "]) if (n.text.includes(t) && !(t in out)) out[t] = n.marks.some((m) => m.type.name === "fontFamily")
+    })
+    return out
+  })
+  check(runs["on "] === true, "typing on from an English run stays Georgia", JSON.stringify(runs))
+  check(runs["dk;Z "] === false, "after choosing Kruti Dev in the dropdown, typing is Kruti Dev", JSON.stringify(runs))
+  check((await fontSelect()) === "kruti", "the dropdown reads Kruti Dev while typing it", await fontSelect())
   await report("after typing in Kruti Dev")
+
+  console.log("— English mixed with Kruti Dev")
+  await open("?lang=mixed")
+  check(/^Georgia,/.test(await editorFont()), "the document's font is Georgia", await editorFont())
+  const krutiInMixed = await page.evaluate(() => {
+    let n = 0
+    window.__pager.view.state.doc.descendants((t) => {
+      if (t.isText && t.marks.some((m) => m.type.name === "fontFamily" && /Kruti Dev/.test(m.attrs.family))) n++
+    })
+    return n
+  })
+  check(krutiInMixed > 20, "Hindi runs carry the Kruti Dev mark", `${krutiInMixed} runs`)
+  await report("mixed English + Kruti Dev")
+  // Choose Kruti Dev on an empty paragraph in the English document and type.
+  await select(await endOfParagraph(5))
+  await page.keyboard.press("Enter")
+  await page.select(".font-select", "kruti")
+  await page.keyboard.type(typed.slice(0, 200))
+  await page.select(".font-select", "georgia")
+  await page.keyboard.type(" and back to English")
+  await sleep(600)
+  const mixedTyping = await page.evaluate(() => {
+    const out = {}
+    window.__pager.view.state.doc.descendants((n) => {
+      if (n.isText && n.text.includes(" and back to English")) out.english = n.marks.map((m) => m.type.name)
+      if (n.isText && n.text.length >= 150 && n.marks.some((m) => /Kruti Dev/.test(m.attrs.family ?? ""))) out.kruti = (out.kruti ?? 0) + 1
+    })
+    return out
+  })
+  check(mixedTyping.kruti >= 1 && !(mixedTyping.english ?? ["?"]).includes("fontFamily"), "switching fonts while typing in an English document", JSON.stringify(mixedTyping))
+  await report("mixed, after typing")
+
+  console.log("— Malayalam in Gayathri")
+  await open("?lang=ml")
+  check(/^"?Gayathri"?,/.test(await editorFont()), "the document's font is Gayathri", await editorFont())
+  check(await page.evaluate(() => document.fonts.check("16px Gayathri", "മ")), "Gayathri has loaded")
+  await report("Malayalam in Gayathri")
 } finally {
   await browser.close()
   try { process.kill(-server.pid) } catch {}
