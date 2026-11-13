@@ -8,7 +8,9 @@
  * trailing one), an empty paragraph, mixed font sizes on one line, marks in
  * headings, and justified text. Then once more with Indic and mixed-script
  * text (tests/indic-samples.json): every sample as a paragraph, plus Indic
- * headings, marks, font sizes and hard breaks.
+ * headings, marks, font sizes and hard breaks. Last, the Hindi seed in
+ * Kruti Dev 010 (?lang=hi): legacy-encoded text in a web font, with Latin
+ * runs in Georgia on the same lines.
  *
  * Requires google-chrome on PATH (or CHROME=/path/to/chrome) and a build.
  */
@@ -32,16 +34,51 @@ try {
   await page.goto("http://localhost:4180/", { waitUntil: "networkidle0" })
   await sleep(1200)
 
-  // Fails on a height off by 0.5px or more, or a DOM split candidate Pretext
-  // doesn't have. Two differences are expected and only listed, as the DOM
-  // path (measure.ts) is the inexact side:
-  //  - extra Pretext candidates: lines that start inside a whitespace-free
-  //    token (after a hyphen, or a long word or URL broken mid-way), which
-  //    the DOM path's /\S+/ word grouping never sees as a line start;
-  //  - a candidate set lower by Pretext on a line with a larger font: the
-  //    DOM path assumes every line has the first line's half-leading.
+  // Fails on a height off by 0.5px or more, a DOM split candidate Pretext
+  // doesn't have, or a split top where Pretext is wrong. Split tops are
+  // judged against the browser itself: the paragraph is cloned, cut at the
+  // split, and its height is the carried line's line-box top. The DOM path
+  // is not the reference there, as it assumes every line has the first
+  // line's half-leading, which is off when a line holds a larger font or
+  // a second font (Latin runs in a Kruti Dev document). Expected, and only
+  // listed: extra Pretext candidates, lines that start inside a
+  // whitespace-free token (after a hyphen, or a long word or URL broken
+  // mid-way), which the DOM path's /\S+/ word grouping never sees.
   const report = async (label) => {
-    const { compared, diffs } = await page.evaluate(() => window.__pager.compareWithDom())
+    const { compared, diffs } = await page.evaluate(() => {
+      const { view } = window.__pager
+      const result = window.__pager.compareWithDom()
+      const host = document.createElement("div")
+      host.className = "ProseMirror"
+      host.style.cssText = `position:absolute;visibility:hidden;top:0;left:0;box-sizing:border-box;width:${view.dom.getBoundingClientRect().width}px`
+      document.getElementById("paper").append(host)
+      for (const d of result.diffs) {
+        const pretext = new Map((d.pretext.splitCandidates ?? []).map((s) => [s.pos, s.height]))
+        d.truth = {}
+        for (const s of d.dom.splitCandidates ?? []) {
+          if (!pretext.has(s.pos) || Math.abs(pretext.get(s.pos) - s.height) < 0.5) continue
+          const clone = view.nodeDOM(d.offset).cloneNode(true)
+          clone.querySelectorAll(".page-gap").forEach((g) => g.remove())
+          clone.style.marginTop = ""
+          host.replaceChildren(clone)
+          const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT)
+          let seen = 0
+          for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            if (seen + n.data.length >= s.pos) {
+              const cut = document.createRange()
+              cut.setStart(n, s.pos - seen)
+              cut.setEndAfter(clone.lastChild)
+              cut.deleteContents()
+              break
+            }
+            seen += n.data.length
+          }
+          d.truth[s.pos] = clone.getBoundingClientRect().height - parseFloat(getComputedStyle(clone).paddingBottom)
+        }
+      }
+      host.remove()
+      return result
+    })
     const problems = []
     const notes = []
     for (const d of diffs) {
@@ -52,11 +89,14 @@ try {
       }
       const pt = new Map((d.pretext.splitCandidates ?? []).map((s) => [s.pos, s.height]))
       const dom = d.dom.splitCandidates ?? []
+      let domOff = 0
       for (const s of dom) {
         if (!pt.has(s.pos)) problems.push(`${where}: DOM line start at ${s.pos} (top ${s.height}px) missing from Pretext`)
-        else if (pt.get(s.pos) - s.height >= 0.5) notes.push(`${where}: line at ${s.pos} sits ${(pt.get(s.pos) - s.height).toFixed(1)}px lower (larger font on the line)`)
-        else if (Math.abs(pt.get(s.pos) - s.height) >= 0.5) problems.push(`${where}: line at ${s.pos} top dom ${s.height} / pretext ${pt.get(s.pos)}`)
+        else if (d.truth[s.pos] === undefined) continue
+        else if (Math.abs(pt.get(s.pos) - d.truth[s.pos]) >= 0.5) problems.push(`${where}: line at ${s.pos} top ${d.truth[s.pos]} / pretext ${pt.get(s.pos)}`)
+        else domOff++
       }
+      if (domOff) notes.push(`${where}: ${domOff} line top(s) where the DOM path is off and Pretext matches the browser`)
       const domPos = new Set(dom.map((s) => s.pos))
       const extra = (d.pretext.splitCandidates ?? []).filter((s) => !domPos.has(s.pos))
       if (extra.length) notes.push(`${where}: ${extra.length} line start(s) inside a token only Pretext finds, at ${extra.map((s) => s.pos).join(", ")}`)
@@ -129,6 +169,82 @@ try {
   }, INDIC)
   await sleep(600)
   await report("seed + stress + Indic blocks")
+
+  console.log("— Hindi seed in Kruti Dev")
+  await page.goto("http://localhost:4180/?lang=hi", { waitUntil: "networkidle0" })
+  await page.evaluate(() => document.fonts.load('16px "Kruti Dev"'))
+  await sleep(1200)
+  const family = await page.evaluate(() => getComputedStyle(window.__pager.view.dom).fontFamily)
+  if (!family.startsWith('"Kruti Dev"')) {
+    console.log(`  ✗ editor font is ${family}`)
+    failures++
+  }
+  await report("Kruti Dev seed")
+
+  console.log("— typing in Kruti Dev")
+  // A Kruti Dev user types ASCII on a Kruti keyboard layout ("fd" is कि),
+  // plus a few non-ASCII keys (Ã, ¡, ±). Type a seed paragraph's own text,
+  // keystroke by keystroke and fast, into a new paragraph mid-document, then
+  // more at the end of an English run.
+  const typed = await page.evaluate(() => {
+    const { view } = window.__pager
+    let source = ""
+    view.state.doc.forEach((n) => {
+      if (!source && n.type.name === "paragraph" && n.textContent.length > 300 && !n.content.content.some((c) => c.marks.length)) source = n.textContent
+    })
+    return source.slice(0, 400)
+  })
+  const check = (ok, label, detail = "") => {
+    console.log(`  ${ok ? "✓" : "✗"} ${label}${detail ? `  — ${detail}` : ""}`)
+    if (!ok) failures++
+  }
+  check(
+    await page.evaluate(() => window.__pager.view.dom.getAttribute("spellcheck") === "false"),
+    "spellcheck is off in a Kruti Dev document"
+  )
+  await page.evaluate(() => {
+    const { view } = window.__pager
+    const p = [...view.dom.querySelectorAll(":scope > p")][8]
+    const r = document.createRange()
+    r.selectNodeContents(p)
+    r.collapse(false)
+    getSelection().removeAllRanges()
+    getSelection().addRange(r)
+    view.focus()
+  })
+  await page.keyboard.press("Enter")
+  await page.keyboard.type(typed)
+  // The end of an English run (a fontFamily mark): typing there is Kruti Dev.
+  const runEnd = await page.evaluate(() => {
+    const { view } = window.__pager
+    let at = null
+    view.state.doc.descendants((n, pos) => {
+      if (at === null && n.isText && n.marks.some((m) => m.type.name === "fontFamily") && n.text.trim().length > 3) at = pos + n.nodeSize
+    })
+    const span = view.domAtPos(at)
+    const r = document.createRange()
+    r.setStart(span.node, span.offset)
+    getSelection().removeAllRanges()
+    getSelection().addRange(r)
+    view.focus()
+    return at
+  })
+  await page.keyboard.type("dk;Z ")
+  await sleep(600)
+  const marks = await page.evaluate(() => {
+    let found = null
+    window.__pager.view.state.doc.descendants((n) => {
+      if (!found && n.isText && n.text.includes("dk;Z ")) found = { text: n.text.slice(0, 40), marks: n.marks.map((m) => m.type.name) }
+    })
+    return found ?? { text: null, marks: [] }
+  })
+  check(marks.text !== null && !marks.marks.includes("fontFamily"), "text typed after an English run is Kruti Dev, not Georgia", JSON.stringify(marks))
+  const typedFamily = await page.evaluate((text) => {
+    const p = [...document.querySelectorAll(".ProseMirror > p")].find((el) => el.textContent === text)
+    return p ? getComputedStyle(p).fontFamily : null
+  }, typed)
+  check(typedFamily?.startsWith('"Kruti Dev"'), "the typed paragraph renders in Kruti Dev", typedFamily ?? "paragraph not found")
+  await report("after typing in Kruti Dev")
 } finally {
   await browser.close()
   try { process.kill(-server.pid) } catch {}

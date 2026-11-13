@@ -28,9 +28,6 @@ import { measureBlock } from "./measure"
 import type { MeasuredBlock } from "./measure"
 import type { SplitCandidate } from "./solver"
 
-/** #paper .ProseMirror font-family. */
-const FAMILY = 'Georgia, "Times New Roman", serif'
-
 interface BlockStyle {
   size: number
   /** Unitless CSS line-height: a run in another font size gets size × this. */
@@ -53,42 +50,78 @@ function blockStyle(node: PMNode): BlockStyle | null {
   return null
 }
 
-const lineHeights = new Map<string, number>()
+const FIT_SLACK = 0.005
+
+interface InlineBox {
+  /** Line-box top to baseline. */
+  above: number
+  /** Baseline to line-box bottom. */
+  below: number
+}
+
+const inlineBoxes = new Map<string, InlineBox>()
 
 /**
- * The height of one line of `size`px text at a unitless `lineHeight`, as
- * this browser lays it out. Not size × lineHeight: WebKit rounds line
- * heights down to whole pixels (22px × 1.3 is 28 there, 28.6 in Chrome and
- * Firefox), so it is read once per size from a hidden probe and cached.
+ * Where an inline box of `size`px `family` text at a unitless `lineHeight`
+ * sits around the baseline, as this browser lays it out. Its height is the
+ * line-height, but the split above and below the baseline follows the
+ * font's ascent and descent, so a line mixing two fonts (Kruti Dev and
+ * Georgia) is taller than either alone. Also not size × lineHeight exactly:
+ * WebKit rounds line heights down to whole pixels (22px × 1.3 is 28 there,
+ * 28.6 in Chrome and Firefox). Read once per font and size from a hidden
+ * probe, and cached.
  */
-function lineHeightPx(size: number, lineHeight: number): number {
-  const key = `${size}/${lineHeight}`
-  let px = lineHeights.get(key)
-  if (px === undefined) {
+function inlineBox(family: string, size: number, lineHeight: number): InlineBox {
+  const key = `${family}/${size}/${lineHeight}`
+  let box = inlineBoxes.get(key)
+  if (box === undefined) {
     const probe = document.createElement("div")
-    probe.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;white-space:nowrap;font-family:${FAMILY};font-size:${size}px;line-height:${lineHeight}`
-    probe.textContent = "x"
+    probe.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;white-space:nowrap;font-family:${family};font-size:${size}px;line-height:${lineHeight}`
+    const baseline = document.createElement("span")
+    baseline.style.cssText = "display:inline-block;width:0;height:0"
+    probe.append("x", baseline)
     document.body.append(probe)
-    px = probe.getBoundingClientRect().height
+    const rect = probe.getBoundingClientRect()
+    const above = baseline.getBoundingClientRect().top - rect.top
+    box = { above, below: rect.height - above }
     probe.remove()
-    lineHeights.set(key, px)
+    inlineBoxes.set(key, box)
   }
-  return px
+  return box
+}
+
+/** A line box's height: from the highest top to the lowest bottom of its inline boxes. */
+function lineHeightOf(boxes: InlineBox[]): number {
+  let above = 0
+  let below = 0
+  for (const b of boxes) {
+    above = Math.max(above, b.above)
+    below = Math.max(below, b.below)
+  }
+  return above + below
 }
 
 /** `strong` is `font-weight: bolder` in the UA stylesheet. */
 const bolder = (weight: number) => (weight < 600 ? 700 : 900)
 
-function runFont(marks: readonly Mark[], base: BlockStyle): { font: string; size: number } {
+function runFont(marks: readonly Mark[], base: BlockStyle, column: Column): { font: string; family: string; size: number } {
   let size = base.size
   let weight = base.weight
   let italic = false
+  let family = column.family
   for (const mark of marks) {
     if (mark.type.name === "strong") weight = bolder(base.weight)
     else if (mark.type.name === "em") italic = true
     else if (mark.type.name === "fontSize") size = mark.attrs.size as number
+    else if (mark.type.name === "fontFamily") family = mark.attrs.family as string
   }
-  return { font: `${italic ? "italic " : ""}${weight} ${size}px ${FAMILY}`, size }
+  return { font: `${italic ? "italic " : ""}${weight} ${size}px ${family}`, family, size }
+}
+
+/** The editor's text column: its content width and font-family, read from the editor. */
+export interface Column {
+  width: number
+  family: string
 }
 
 interface Line {
@@ -102,28 +135,30 @@ interface Line {
  * paragraph or heading, or holds inline content other than text and hard
  * breaks.
  *
- * Line heights follow CSS for a unitless line-height in one font family: a
- * line is as tall as one line of its largest font size (lineHeightPx),
- * never less than the block's own (the strut). Split candidates use the same convention as
+ * Line heights follow CSS for a unitless line-height: each run's inline box
+ * is aligned on the baseline (inlineBox), and a line spans from the highest
+ * top to the lowest bottom, the block's own strut included. Split candidates use the same convention as
  * measure.ts: positions relative to the content start, heights to the
  * carried line's line-box top.
  */
-export function measureWithPretext(node: PMNode, contentWidth: number): MeasuredBlock | null {
+export function measureWithPretext(node: PMNode, column: Column): MeasuredBlock | null {
   const style = blockStyle(node)
   if (!style) return null
 
+  // Every line holds the block's own strut, in its font and size.
+  const strut = inlineBox(column.family, style.size, style.lineHeight)
   const items: RichInlineItem[] = []
   const starts: number[] = []
-  const sizes: number[] = []
+  const boxes: InlineBox[] = []
   let supported = true
   node.forEach((child, offset) => {
     if (child.isText) {
-      const run = runFont(child.marks, style)
+      const run = runFont(child.marks, style, column)
       items.push({ text: child.text!, font: run.font })
-      sizes.push(run.size)
+      boxes.push(inlineBox(run.family, run.size, style.lineHeight))
     } else if (child.type.name === "hard_break") {
-      items.push({ text: "\n", font: runFont([], style).font })
-      sizes.push(style.size)
+      items.push({ text: "\n", font: runFont([], style, column).font })
+      boxes.push(strut)
     } else {
       supported = false
     }
@@ -131,29 +166,30 @@ export function measureWithPretext(node: PMNode, contentWidth: number): Measured
   })
   if (!supported) return null
 
-  const strut = lineHeightPx(style.size, style.lineHeight)
   const lines: Line[] = []
   if (items.length > 0) {
     // The editor is white-space: pre-wrap (#paper .ProseMirror).
     const prepared = prepareRichInline(items, { whiteSpace: "pre-wrap" })
-    walkRichInlineLineRanges(prepared, contentWidth, (range) => {
+    // Pretext lets a line overflow by 0.005px in Chrome; Chrome itself wraps
+    // a line 0.0015px over (seen in the Kruti Dev seed), so take it back.
+    walkRichInlineLineRanges(prepared, column.width - FIT_SLACK, (range) => {
       const line = materializeRichInlineLineRange(prepared, range)
-      let tallest = style.size
+      const onLine = [strut]
       let pos: number | null = null
       for (const fragment of line.fragments) {
-        if (fragment.text.length > 0) tallest = Math.max(tallest, sizes[fragment.itemIndex])
+        if (fragment.text.length > 0) onLine.push(boxes[fragment.itemIndex])
         if (pos === null) {
           const k = fragment.text.search(/\S/)
           if (k >= 0) pos = starts[fragment.itemIndex] + fragment.sourceStart + k
         }
       }
-      lines.push({ height: lineHeightPx(tallest, style.lineHeight), pos })
+      lines.push({ height: lineHeightOf(onLine), pos })
     })
   }
   // An empty block still renders one line, and a trailing hard break gets a
   // line of its own from ProseMirror's trailing <br>; Pretext counts neither.
   if (lines.length === 0 || node.lastChild?.type.name === "hard_break") {
-    lines.push({ height: strut, pos: null })
+    lines.push({ height: lineHeightOf([strut]), pos: null })
   }
 
   let top = 0
@@ -170,6 +206,8 @@ export function measureWithPretext(node: PMNode, contentWidth: number): Measured
 
 export interface MeasureDiff {
   index: number
+  /** The block's document position. */
+  offset: number
   type: string
   text: string
   dom: MeasuredBlock
@@ -181,13 +219,16 @@ const sameSplits = (a: SplitCandidate[] | null, b: SplitCandidate[] | null) =>
   (a ?? []).every((s, i) => s.pos === b![i].pos && Math.abs(s.height - b![i].height) < 0.5)
 
 /**
- * The editor's text column in px: its content box, inside the side padding
- * that is the page margin. One layout read per pass, in place of reading
- * every word's rect.
+ * The editor's text column: its content box, inside the side padding that is
+ * the page margin, and its font-family (Kruti Dev for a Hindi document). One
+ * layout read per pass, in place of reading every word's rect.
  */
-export function editorContentWidth(view: EditorView): number {
+export function editorColumn(view: EditorView): Column {
   const style = getComputedStyle(view.dom)
-  return view.dom.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+  return {
+    width: view.dom.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+    family: style.fontFamily,
+  }
 }
 
 /**
@@ -199,15 +240,15 @@ export function compareWithDom(view: EditorView): { compared: number; diffs: Mea
   const diffs: MeasureDiff[] = []
   let compared = 0
   let index = 0
-  const width = editorContentWidth(view)
+  const column = editorColumn(view)
   view.state.doc.forEach((node, offset) => {
     const i = index++
-    const pretext = measureWithPretext(node, width)
+    const pretext = measureWithPretext(node, column)
     if (!pretext) return
     compared++
     const dom = measureBlock(view, view.nodeDOM(offset) as HTMLElement | null, node, offset + 1)
     if (Math.abs(dom.height - pretext.height) >= 0.5 || !sameSplits(dom.splitCandidates, pretext.splitCandidates)) {
-      diffs.push({ index: i, type: node.type.name, text: node.textContent.slice(0, 80), dom, pretext })
+      diffs.push({ index: i, offset, type: node.type.name, text: node.textContent.slice(0, 80), dom, pretext })
     }
   })
   return { compared, diffs }

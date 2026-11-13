@@ -114,6 +114,17 @@ body {
   caret-color: var(--accent);
 }
 
+/* Hindi documents in Kruti Dev 010 (src/kruti.ts re-encodes the text);
+   Latin runs carry a fontFamily mark back to Georgia. */
+@font-face {
+  font-family: "Kruti Dev";
+  src: url("/fonts/krutidev-010-regular.ttf") format("truetype");
+}
+
+#paper[data-font="kruti"] .ProseMirror {
+  font-family: "Kruti Dev", Georgia, "Times New Roman", serif;
+}
+
 #paper .ProseMirror > * {
   margin: 0;
 }
