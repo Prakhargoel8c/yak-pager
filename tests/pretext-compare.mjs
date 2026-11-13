@@ -175,7 +175,7 @@ try {
   await page.evaluate(() => document.fonts.load('16px "Kruti Dev"'))
   await sleep(1200)
   const family = await page.evaluate(() => getComputedStyle(window.__pager.view.dom).fontFamily)
-  if (!family.startsWith('"Kruti Dev"')) {
+  if (!/^"?Kruti Dev"?,/.test(family)) {
     console.log(`  ✗ editor font is ${family}`)
     failures++
   }
@@ -243,7 +243,7 @@ try {
     const p = [...document.querySelectorAll(".ProseMirror > p")].find((el) => el.textContent === text)
     return p ? getComputedStyle(p).fontFamily : null
   }, typed)
-  check(typedFamily?.startsWith('"Kruti Dev"'), "the typed paragraph renders in Kruti Dev", typedFamily ?? "paragraph not found")
+  check(/^"?Kruti Dev"?,/.test(typedFamily ?? ""), "the typed paragraph renders in Kruti Dev", typedFamily ?? "paragraph not found")
   await report("after typing in Kruti Dev")
 } finally {
   await browser.close()
