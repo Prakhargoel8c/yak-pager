@@ -38,7 +38,7 @@ import type { ApiCounts } from "./apiMeter"
 import type { SplitCandidate } from "./solver"
 import { CONTENT_H, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
 import { measureBlock } from "./measure"
-import { editorContentWidth, measureWithPretext } from "./pretextMeasure"
+import { editorColumn, measureWithPretext } from "./pretextMeasure"
 import { clearCache as clearPretextCache } from "@chenglou/pretext"
 import type { MeasuredBlock } from "./measure"
 
@@ -449,7 +449,7 @@ export function paginationPlugin(
         // All getBoundingClientRect calls happen before any write, so the
         // browser performs layout once, not interleaved read/write cycles.
         const blockEls = topBlockElements(view.dom)
-        const contentWidth = usePretext ? editorContentWidth(view) : 0
+        const column = usePretext ? editorColumn(view) : null
         const blocks: { pos: number; end: number; height: number; forced: boolean; splitCandidates?: SplitCandidate[] }[] = []
         let measured = 0
         let i = 0
@@ -463,7 +463,7 @@ export function paginationPlugin(
           if (full || m === undefined || inDirty) {
             // getBoundingClientRect().height, not offsetHeight: offsetHeight
             // rounds to integers and the error accumulates across a page.
-            m = (usePretext ? measureWithPretext(node, contentWidth) : null) ?? measureBlock(view, el, node, contentStart)
+            m = (column ? measureWithPretext(node, column) : null) ?? measureBlock(view, el, node, contentStart)
             cache.set(node, m)
             measured++
           }

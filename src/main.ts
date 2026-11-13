@@ -18,7 +18,8 @@ import "./styles.css"
 // Paragraphs and headings are measured with Pretext; ?measure=dom reads them from the DOM instead.
 const params = new URLSearchParams(location.search)
 const measurer: Measurer = params.get("measure") === "dom" ? "dom" : "pretext"
-// ?lang=hi|ml|kn loads the seed document in Hindi, Malayalam or Kannada; English otherwise.
+// ?lang=hi|hi-unicode|ml|kn loads the seed document in Hindi (Kruti Dev or
+// Unicode), Malayalam or Kannada; English otherwise.
 const langParam = params.get("lang") ?? ""
 const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 
@@ -26,6 +27,13 @@ const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 installApiMeter()
 
 const paperHost = document.getElementById("paper")!
+let currentLang = lang
+const setFont = (l: Language) => {
+  currentLang = l
+  if (LANGUAGES[l].font) paperHost.dataset.font = LANGUAGES[l].font
+  else delete paperHost.dataset.font
+}
+setFont(lang)
 const panel = createDevPanel(document.getElementById("panel")!)
 
 let toolbar: { sync: () => void } | null = null
@@ -55,6 +63,12 @@ const view = new EditorView(paperHost, {
       paginationPlugin({ onReflow, measurer }),
     ],
   }),
+  // Kruti Dev text is ASCII underneath ("fd" is कि): spellcheck would flag
+  // every word and autocorrect would rewrite keystrokes.
+  attributes: (): Record<string, string> =>
+    LANGUAGES[currentLang].font === "kruti"
+      ? { spellcheck: "false", autocorrect: "off", autocapitalize: "off" }
+      : {},
   dispatchTransaction(tr: Transaction) {
     view.updateState(view.state.apply(tr))
     toolbar?.sync()
@@ -125,6 +139,7 @@ function languageSelect(): HTMLSelectElement {
     else url.searchParams.set("lang", next)
     window.history.replaceState(null, "", url)
     const current = paginationKey.getState(view.state)!.measurer
+    setFont(next)
     view.updateState(EditorState.create({ doc: buildSeedDoc(next), plugins: view.state.plugins }))
     setMeasurer(view, current)
     toolbar?.sync()
@@ -137,8 +152,11 @@ function languageSelect(): HTMLSelectElement {
 // Heights can change without the document changing: fonts settling, images
 // loading, the window resizing. Each triggers a full re-measure through a
 // meta-transaction; the pass itself stays idempotent.
+// A web font (Kruti Dev) starts loading when text first uses it, after
+// document.fonts.ready may already have resolved, hence loadingdone too.
 if (typeof document !== "undefined" && "fonts" in document) {
   document.fonts.ready.then(() => requestFullRecompute(view))
+  document.fonts.addEventListener("loadingdone", () => requestFullRecompute(view))
 }
 window.addEventListener("resize", () => requestFullRecompute(view))
 // Capture phase: <load> does not bubble, and it fires on descendants.
