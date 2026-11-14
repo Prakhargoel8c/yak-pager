@@ -38,7 +38,7 @@ import type { ApiCounts } from "./apiMeter"
 import type { SplitCandidate } from "./solver"
 import { CONTENT_H, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
 import { measureBlock } from "./measure"
-import { editorColumn, measureWithPretext } from "./pretextMeasure"
+import { clearInlineBoxes, editorColumn, measureWithPretext } from "./pretextMeasure"
 import { clearCache as clearPretextCache } from "@chenglou/pretext"
 import type { MeasuredBlock } from "./measure"
 
@@ -61,6 +61,12 @@ export interface PaginationState {
   dirty: { from: number; to: number } | null
   /** How paragraphs and headings are measured; see Measurer. */
   measurer: Measurer
+  /**
+   * A full re-measure was requested (fonts loaded, resize, measurer or
+   * document switch): the next pass also drops Pretext's cached widths and
+   * line boxes, which may have been measured in a fallback font.
+   */
+  full: boolean
 }
 
 export type OpKind =
@@ -212,6 +218,7 @@ export function paginationPlugin(
         pageCount: 1,
         dirty: null,
         measurer: options.measurer ?? "pretext",
+        full: false,
       }),
 
       /**
@@ -229,6 +236,7 @@ export function paginationPlugin(
             measurer: full.measurer ?? prev.measurer,
             decos: prev.decos.map(tr.mapping, tr.doc),
             dirty: { from: 0, to: tr.doc.content.size },
+            full: true,
           }
         }
 
@@ -256,6 +264,7 @@ export function paginationPlugin(
             pageCount: meta.pageCount,
             decos: DecorationSet.create(tr.doc, widgets),
             dirty: null,
+            full: false,
           }
         }
         return next
@@ -443,7 +452,10 @@ export function paginationPlugin(
         const measureCalls = startMeter()
         // A full pass follows fonts loading or a resize: widths Pretext
         // measured before a font loaded are the fallback font's.
-        if (full && usePretext) clearPretextCache()
+        if (full && usePretext) {
+          clearPretextCache()
+          clearInlineBoxes()
+        }
 
         // -------- (a) MEASURE: batched DOM reads, then nothing but reads --
         // All getBoundingClientRect calls happen before any write, so the
@@ -541,7 +553,7 @@ export function paginationPlugin(
       return {
         update() {
           const s = paginationKey.getState(view.state)!
-          if (s.dirty != null) schedule()
+          if (s.dirty != null) schedule(s.full)
         },
         destroy() {
           destroyed = true

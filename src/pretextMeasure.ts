@@ -61,6 +61,11 @@ interface InlineBox {
 
 const inlineBoxes = new Map<string, InlineBox>()
 
+/** Forget probed line boxes: a web font that finished loading has new metrics. */
+export function clearInlineBoxes(): void {
+  inlineBoxes.clear()
+}
+
 /**
  * Where an inline box of `size`px `family` text at a unitless `lineHeight`
  * sits around the baseline, as this browser lays it out. Its height is the
