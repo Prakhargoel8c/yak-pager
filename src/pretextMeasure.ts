@@ -19,11 +19,12 @@
 import type { Mark, Node as PMNode } from "prosemirror-model"
 import type { EditorView } from "prosemirror-view"
 import {
+  layoutNextRichInlineLineRange,
   materializeRichInlineLineRange,
   prepareRichInline,
   walkRichInlineLineRanges,
 } from "@chenglou/pretext/rich-inline"
-import type { RichInlineItem } from "@chenglou/pretext/rich-inline"
+import type { PreparedRichInline, RichInlineItem, RichInlineLineRange } from "@chenglou/pretext/rich-inline"
 import { measureBlock } from "./measure"
 import type { MeasuredBlock } from "./measure"
 import type { SplitCandidate } from "./solver"
@@ -50,7 +51,12 @@ function blockStyle(node: PMNode): BlockStyle | null {
   return null
 }
 
-const FIT_SLACK = 0.005
+/**
+ * Chrome lays text out in 1/64px units, and its widths drift from canvas by
+ * less than that on lines mixing fonts. A line this close to the column
+ * edge may or may not fit, so the browser decides it (fitsInBrowser).
+ */
+const EDGE = 1 / 64
 
 interface InlineBox {
   /** Line-box top to baseline. */
@@ -61,9 +67,86 @@ interface InlineBox {
 
 const inlineBoxes = new Map<string, InlineBox>()
 
-/** Forget probed line boxes: a web font that finished loading has new metrics. */
+const edgeFits = new Map<string, boolean>()
+
+/** Forget probed line boxes and edge lines: a web font that finished loading has new metrics. */
 export function clearInlineBoxes(): void {
   inlineBoxes.clear()
+  edgeFits.clear()
+}
+
+/**
+ * Whether the browser keeps this text on one line at `width`: laid out once
+ * in a hidden probe with the editor's text settings, and cached.
+ */
+function fitsInBrowser(runs: { text: string; font: string }[], width: number): boolean {
+  const key = `${width}|${runs.map((r) => `${r.font}\u0000${r.text}`).join("\u0001")}`
+  let fits = edgeFits.get(key)
+  if (fits === undefined) {
+    const probe = document.createElement("div")
+    probe.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;width:${width}px;white-space:pre-wrap;word-wrap:break-word;font-variant-ligatures:none`
+    for (const run of runs) {
+      const span = document.createElement("span")
+      span.style.font = run.font
+      span.textContent = run.text
+      probe.append(span)
+    }
+    document.body.append(probe)
+    const first = probe.firstChild!.firstChild as Text
+    const last = probe.lastChild!.firstChild as Text
+    const range = document.createRange()
+    range.setStart(first, 0)
+    range.setEnd(first, 1)
+    const top = range.getBoundingClientRect().top
+    range.setStart(last, last.length - 1)
+    range.setEnd(last, last.length)
+    fits = Math.abs(range.getBoundingClientRect().top - top) < 1
+    probe.remove()
+    edgeFits.set(key, fits)
+  }
+  return fits
+}
+
+/**
+ * The block's line ranges at `width`. Pretext breaks every line; a line
+ * whose fit is within EDGE of the column is settled by the browser.
+ */
+function lineRanges(prepared: PreparedRichInline, items: RichInlineItem[], width: number): RichInlineLineRange[] {
+  const ranges: RichInlineLineRange[] = []
+  let close = false
+  walkRichInlineLineRanges(prepared, width + EDGE, (range) => {
+    ranges.push(range)
+    if (range.width > width - EDGE) close = true
+  })
+  if (!close) return ranges
+
+  ranges.length = 0
+  let cursor: RichInlineLineRange["end"] | undefined
+  for (;;) {
+    const loose = layoutNextRichInlineLineRange(prepared, width + EDGE, cursor)
+    if (!loose) break
+    let range = loose
+    if (loose.width > width - EDGE) {
+      const runs = materializeRichInlineLineRange(prepared, loose).fragments
+        .map((f) => ({ text: f.text, font: items[f.itemIndex].font }))
+        .filter((r) => r.text.length > 0)
+      while (runs.length > 0) {
+        const last = runs[runs.length - 1]
+        const text = last.text.replace(/\s+$/, "")
+        if (text) {
+          runs[runs.length - 1] = { ...last, text }
+          break
+        }
+        runs.pop()
+      }
+      if (runs.length > 0 && !fitsInBrowser(runs, width)) {
+        range = layoutNextRichInlineLineRange(prepared, width - EDGE, cursor) ?? loose
+      }
+    }
+    ranges.push(range)
+    cursor = range.end
+  }
+  return ranges
 }
 
 /**
@@ -175,9 +258,7 @@ export function measureWithPretext(node: PMNode, column: Column): MeasuredBlock 
   if (items.length > 0) {
     // The editor is white-space: pre-wrap (#paper .ProseMirror).
     const prepared = prepareRichInline(items, { whiteSpace: "pre-wrap" })
-    // Pretext lets a line overflow by 0.005px in Chrome; Chrome itself wraps
-    // a line 0.0015px over (seen in the Kruti Dev seed), so take it back.
-    walkRichInlineLineRanges(prepared, column.width - FIT_SLACK, (range) => {
+    for (const range of lineRanges(prepared, items, column.width)) {
       const line = materializeRichInlineLineRange(prepared, range)
       const onLine = [strut]
       let pos: number | null = null
@@ -189,7 +270,7 @@ export function measureWithPretext(node: PMNode, column: Column): MeasuredBlock 
         }
       }
       lines.push({ height: lineHeightOf(onLine), pos })
-    })
+    }
   }
   // An empty block still renders one line, and a trailing hard break gets a
   // line of its own from ProseMirror's trailing <br>; Pretext counts neither.

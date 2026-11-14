@@ -342,7 +342,7 @@ try {
     ["wide", { top: 1, right: 2, bottom: 1, left: 2 }],
     ["edit", { top: 0.6, right: 0.5, bottom: 1.4, left: 1.25 }],
   ]
-  for (const lang of ["", "?lang=ml"]) {
+  for (const lang of ["", "?lang=hi", "?lang=mixed", "?lang=ml"]) {
     await open(lang)
     for (const [preset, m] of MARGINS) {
       await page.select(".margins-select", preset)
