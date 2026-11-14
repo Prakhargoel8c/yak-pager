@@ -136,6 +136,22 @@ describe("solve with line splits", () => {
     expect(r.pageStarts).toEqual([0, PAGE + BAND, 2 * (PAGE + BAND)])
   })
 
+  it("a paragraph pushed off a full page still splits on the next page", () => {
+    // Room is 20, less than one 24px line, so nothing splits there and the
+    // paragraph moves to page 2; at 1200px it is taller than that page too,
+    // so it must split again there rather than overflow it.
+    const r = solve([{ pos: 0, height: 844 }, para(50, 24)], PAGE)
+    expect(r.breaks.map((b) => b.pos)).toEqual([10, 100 + 35])
+    expect(r.breaks.map((b) => b.remaining)).toEqual([20, 0])
+    expect(r.fills).toEqual([844, 864, 336])
+    expect(r.pageStarts).toEqual([0, PAGE + BAND, 2 * (PAGE + BAND)])
+  })
+
+  it("band: the space between pages follows the margins", () => {
+    const r = solve(blocks([800, 200]), 960, [], 120)
+    expect(r.pageStarts).toEqual([0, 960 + 120])
+  })
+
   it("widow minimum: a 3-line paragraph never splits (2 would stay, only 1 would move)", () => {
     const r = solve([{ pos: 0, height: 800 }, para(3, 24)], PAGE)
     expect(r.breaks).toEqual([{ pos: 10, remaining: 64 }])

@@ -20,8 +20,8 @@
  * is a throwaway rendering built from the doc model: it never touches editor
  * state, history, or the Y.Doc, exactly like the decorations it mirrors.
  *
- * Geometry is the live view's geometry (src/layout.ts): 816x1056 sheets, 96px
- * margins, a 624px writable column. The content CSS is copied from the
+ * Geometry is the live view's geometry (src/layout.ts): 816x1056 sheets and
+ * the document's margins. The content CSS is copied from the
  * editor's styles.css; any drift there re-wraps lines and breaks parity.
  */
 import { DOMSerializer } from "prosemirror-model"
@@ -29,7 +29,8 @@ import type { Node as PMNode } from "prosemirror-model"
 import type { EditorView } from "prosemirror-view"
 import { schema } from "./schema"
 import { paginationKey } from "./paginationPlugin"
-import { PX_PER_IN, SHEET_W, SHEET_H, MARGIN } from "./layout"
+import { PX_PER_IN, SHEET_W, SHEET_H, marginsOf, pageGeometry } from "./layout"
+import type { PageGeometry } from "./layout"
 
 /** Paper size as a CSS @page value, derived from the live geometry. */
 const PAGE_SIZE = `${SHEET_W / PX_PER_IN}in ${SHEET_H / PX_PER_IN}in`
@@ -65,16 +66,17 @@ ${scope} [data-page-break] { visibility: hidden; border-top: 1px solid transpare
 `
 }
 
-function printCSS(approach: "B" | "C"): string {
+function printCSS(approach: "B" | "C", g: PageGeometry): string {
+  const margin = `${g.top}px ${g.right}px ${g.bottom}px ${g.left}px`
   if (approach === "B") {
     return `
-/* Page boxes come entirely from the print engine: sheet size and the 96px
-   margins are @page, and the page number is a margin box (Chrome 131+; on
-   older browsers the numbers are simply absent). The writable column is
-   816 - 2x96 = 624px — the same 624px the live editor writes in. */
+/* Page boxes come entirely from the print engine: sheet size and the
+   document's margins are @page, and the page number is a margin box (Chrome
+   131+; on older browsers the numbers are simply absent). The writable
+   column is 816 - left - right, the same column the live editor writes in. */
 @page {
   size: ${PAGE_SIZE};
-  margin: ${MARGIN}px;
+  margin: ${margin};
   @bottom-center {
     content: counter(page);
     font-family: ui-sans-serif, system-ui, sans-serif;
@@ -99,7 +101,7 @@ html, body { margin: 0; padding: 0; }
   width: ${SHEET_W}px;
   height: ${SHEET_H}px;
   box-sizing: border-box;
-  padding: ${MARGIN}px;
+  padding: ${margin};
   position: relative;
   page-break-after: always;
 }
@@ -111,7 +113,7 @@ ${typography(".sheet")}
   left: 0;
   right: 0;
   bottom: 0;
-  height: ${MARGIN}px;
+  height: ${g.bottom}px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -222,7 +224,7 @@ function buildPrintHTML(view: EditorView, approach: "B" | "C"): string {
 <head>
 <meta charset="utf-8">
 <title>yak-pager print preview (${approach})</title>
-<style>${printCSS(approach)}</style>
+<style>${printCSS(approach, pageGeometry(marginsOf(view.state.doc.attrs.margins)))}</style>
 </head>
 <body>${wrapped}</body>
 </html>

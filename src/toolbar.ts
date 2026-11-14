@@ -15,6 +15,7 @@ import type { EditorState } from "prosemirror-state"
 import { schema } from "./schema"
 import { FONTS, fontKeyOf, isFontKey } from "./fonts"
 import type { FontKey } from "./fonts"
+import { buildMarginsControl } from "./marginsControl"
 
 const { strong, em, fontSize, fontFamily } = schema.marks
 
@@ -221,6 +222,8 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
   }
   alignSel.onchange = () => run(setAlign(alignSel.value))()
 
+  const margins = buildMarginsControl(view, run)
+
   const pbBtn = document.createElement("button")
   pbBtn.textContent = "⤓ Page break"
   pbBtn.title = "Insert explicit page break (Mod-Enter)"
@@ -230,7 +233,7 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
   hint.className = "tb-hint"
   hint.textContent = "Ctrl/⌘-Z undoes typing — pagination is never in the undo stack"
 
-  mount.append(strongBtn, emBtn, fontSel, sizeSel, blockSel, alignSel, pbBtn, hint)
+  mount.append(strongBtn, emBtn, fontSel, sizeSel, blockSel, alignSel, margins.el, pbBtn, hint)
 
   const sync = () => {
     const { state } = view
@@ -248,6 +251,7 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
     // Blocks without the attr (rules, page breaks) match no option, so the
     // select shows blank — the control has nothing to say there.
     alignSel.value = "align" in parent.attrs ? parent.attrs.align : ""
+    margins.sync()
   }
   sync()
   return { sync }

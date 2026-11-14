@@ -37,6 +37,70 @@ export const TILE_W = SHEET_W + 2 * BLEED // 832
 export const TILE_H = SHEET_H + 2 * BLEED // 1072
 export const FLOW_PERIOD = CONTENT_H + 216 // 1080 (BAND imported type-only; value must match solver)
 
+/**
+ * Page margins in inches, the document's `margins` attr (schema.ts).
+ * Everything above is the default 1in geometry; a document with other
+ * margins gets its geometry from pageGeometry.
+ */
+export interface Margins {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+export const DEFAULT_MARGINS: Margins = { top: 1, right: 1, bottom: 1, left: 1 }
+
+/** Smallest writable area a margin choice may leave, in inches. */
+export const MIN_CONTENT_IN = 1
+
+/** The margins a document's attr asks for, or the defaults for a malformed value. */
+export function marginsOf(attr: unknown): Margins {
+  const m = attr as Partial<Margins> | null
+  const ok = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0
+  if (!m || ![m.top, m.right, m.bottom, m.left].every(ok)) return DEFAULT_MARGINS
+  const g = m as Margins
+  if (SHEET_H / PX_PER_IN - g.top - g.bottom < MIN_CONTENT_IN) return DEFAULT_MARGINS
+  if (SHEET_W / PX_PER_IN - g.left - g.right < MIN_CONTENT_IN) return DEFAULT_MARGINS
+  return g
+}
+
+/** A page's geometry in px for a set of margins. */
+export interface PageGeometry {
+  top: number
+  right: number
+  bottom: number
+  left: number
+  /** Writable height of a page: the solver's pageHeight. */
+  contentH: number
+  /** Inter-page space at a break: bottom margin + desk gap + top margin. */
+  band: number
+}
+
+export function pageGeometry(m: Margins): PageGeometry {
+  const [top, right, bottom, left] = [m.top, m.right, m.bottom, m.left].map((v) => v * PX_PER_IN)
+  return { top, right, bottom, left, contentH: SHEET_H - top - bottom, band: bottom + DESK_GAP + top }
+}
+
+/**
+ * Point the CSS at a geometry: the editor's side padding, the stack's top
+ * padding and the gap widget's band all read these variables (styles.css).
+ * Change-checked, so an unchanged geometry writes nothing.
+ */
+export function applyGeometry(stack: HTMLElement, g: PageGeometry) {
+  const vars: Array<[string, number]> = [
+    ["--margin-top", g.top],
+    ["--margin-right", g.right],
+    ["--margin-bottom", g.bottom],
+    ["--margin-left", g.left],
+    ["--content-h", g.contentH],
+  ]
+  for (const [name, px] of vars) {
+    const v = `${px}px`
+    if (stack.style.getPropertyValue(name) !== v) stack.style.setProperty(name, v)
+  }
+}
+
 const SHEET_URI = `data:image/svg+xml,${encodeURIComponent(
   `<svg xmlns='http://www.w3.org/2000/svg' width='${TILE_W}' height='${TILE_H}'>` +
     `<defs><filter id='s' x='-4%' y='-4%' width='108%' height='108%'>` +
@@ -57,12 +121,12 @@ function setStyleIfChanged(el: HTMLElement, prop: "backgroundImage" | "backgroun
  * 1080px period) are handled by the same mechanism — no special cases.
  * Assignments are change-checked, so a stable layout writes nothing.
  */
-export function paintSheets(stack: HTMLElement, pageStarts: number[], fills: number[]) {
+export function paintSheets(stack: HTMLElement, pageStarts: number[], fills: number[], g: PageGeometry) {
   const n = pageStarts.length
   const image = Array(n).fill(`url("${SHEET_URI}")`).join(", ")
   const position = pageStarts.map((s) => `0px ${s}px`).join(", ")
   const fillLast = fills[fills.length - 1] ?? 0
-  const paddingBottom = Math.max(0, MARGIN + CONTENT_H + BLEED - fillLast)
+  const paddingBottom = Math.max(0, g.bottom + g.contentH + BLEED - fillLast)
   setStyleIfChanged(stack, "backgroundImage", image)
   setStyleIfChanged(stack, "backgroundPosition", position)
   setStyleIfChanged(stack, "paddingBottom", `${paddingBottom}px`)

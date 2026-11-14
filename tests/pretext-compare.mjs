@@ -330,6 +330,81 @@ try {
   check(/^"?Gayathri"?,/.test(await editorFont()), "the document's font is Gayathri", await editorFont())
   check(await page.evaluate(() => document.fonts.check("16px Gayathri", "മ")), "Gayathri has loaded")
   await report("Malayalam in Gayathri")
+
+  console.log("— Page margins")
+  // For each preset and a lopsided custom set: the column is 816 - left -
+  // right, every gap widget is band + push tall and lands the next page at
+  // its sheet's content top, and no line of text sits outside a page's
+  // writable area. Then undo returns to 1in margins.
+  const MARGINS = [
+    ["narrow", { top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 }],
+    ["moderate", { top: 1, right: 0.75, bottom: 1, left: 0.75 }],
+    ["wide", { top: 1, right: 2, bottom: 1, left: 2 }],
+    ["edit", { top: 0.6, right: 0.5, bottom: 1.4, left: 1.25 }],
+  ]
+  for (const lang of ["", "?lang=ml"]) {
+    await open(lang)
+    for (const [preset, m] of MARGINS) {
+      await page.select(".margins-select", preset)
+      if (preset === "edit") {
+        for (const side of ["top", "right", "bottom", "left"]) {
+          await page.$eval(`.margins-pop input[name=${side}]`, (el, v) => (el.value = String(v)), m[side])
+        }
+        await page.click(".margins-pop button[type=submit]")
+      }
+      await sleep(400)
+      const errs = await page.evaluate((m) => {
+        const v = window.__pager.view
+        const st = window.__pager.key.getState(v.state)
+        const stack = v.dom.parentElement
+        const [T, R, B, L] = [m.top, m.right, m.bottom, m.left].map((x) => x * 96)
+        const contentH = 1056 - T - B
+        const band = B + 24 + T
+        const out = []
+        const cs = getComputedStyle(v.dom)
+        const col = v.dom.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+        if (Math.abs(col - (816 - L - R)) > 0.01) out.push(`column ${col}`)
+        const starts = stack.style.backgroundPosition.split(",").map((p) => parseFloat(p.trim().split(" ")[1]))
+        const origin = stack.getBoundingClientRect().top + T + 8
+        const gaps = [...v.dom.querySelectorAll(".page-gap")].sort((a, b) => a.dataset.page - b.dataset.page)
+        if (gaps.length !== st.breaks.length) out.push(`${gaps.length} gaps for ${st.breaks.length} breaks`)
+        gaps.forEach((g, k) => {
+          const r = g.getBoundingClientRect()
+          if (Math.abs(r.height - (band + st.breaks[k].remaining)) > 0.5) out.push(`gap ${k} is ${r.height}px`)
+          if (Math.abs(r.bottom - origin - starts[k + 1]) > 0.5) out.push(`page ${k + 2} lands at ${r.bottom - origin}, not ${starts[k + 1]}`)
+        })
+        const range = document.createRange()
+        const walker = document.createTreeWalker(v.dom, NodeFilter.SHOW_TEXT, {
+          acceptNode: (n) => (n.parentElement.closest(".page-gap") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+        })
+        let outside = 0
+        while (walker.nextNode()) {
+          range.selectNodeContents(walker.currentNode)
+          for (const r of range.getClientRects()) {
+            if (r.height === 0) continue
+            const k = starts.findLastIndex((s) => s <= r.top - origin + 0.5)
+            if (k < 0 || r.bottom - origin > starts[k] + contentH + 0.5) outside++
+          }
+        }
+        if (outside) out.push(`${outside} text rects outside a page`)
+        return out
+      }, m)
+      check(errs.length === 0, `${lang || "English"} margins ${preset === "edit" ? "custom" : preset}`, errs.slice(0, 4).join("; "))
+    }
+    await page.focus(".ProseMirror")
+    for (let i = 0; i < MARGINS.length; i++) {
+      await page.keyboard.down("Meta")
+      await page.keyboard.press("z")
+      await page.keyboard.up("Meta")
+    }
+    await sleep(400)
+    const back = await page.evaluate(() => ({
+      margins: window.__pager.view.state.doc.attrs.margins,
+      select: document.querySelector(".margins-select").value,
+      padding: getComputedStyle(window.__pager.view.dom).paddingLeft,
+    }))
+    check(back.margins.top === 1 && back.margins.left === 1 && back.select === "normal" && back.padding === "96px", `${lang || "English"} undo restores 1in margins`, JSON.stringify(back))
+  }
 } finally {
   await browser.close()
   try { process.kill(-server.pid) } catch {}
