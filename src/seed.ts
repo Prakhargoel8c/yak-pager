@@ -10,6 +10,7 @@ import en from "./seed-text/en.json"
 import hi from "./seed-text/hi.json"
 import ml from "./seed-text/ml.json"
 import kn from "./seed-text/kn.json"
+import { splitKrutiRuns } from "./kruti"
 
 const m = {
   strong: () => schema.marks.strong.create(),
@@ -17,17 +18,24 @@ const m = {
   size: (px: number) => schema.marks.fontSize.create({ size: px }),
 }
 
-function text(str: string, marks: Mark[] = []) {
-  return schema.text(str, marks)
+/** The editor's own font, for the Latin runs inside a Kruti Dev document. */
+export const LATIN_FAMILY = 'Georgia, "Times New Roman", serif'
+
+/** Set while building a Kruti Dev document: text is re-encoded, Latin runs keep LATIN_FAMILY. */
+let kruti = false
+
+function text(str: string, marks: Mark[] = []): Node[] {
+  if (!kruti) return [schema.text(str, marks)]
+  const latin = schema.marks.fontFamily.create({ family: LATIN_FAMILY })
+  return splitKrutiRuns(str).map((r) => schema.text(r.text, r.kruti ? marks : latin.addToSet(marks)))
 }
 
 function heading(level: 1 | 2 | 3, str: string) {
-  return schema.nodes.heading.create({ level }, schema.text(str))
+  return schema.nodes.heading.create({ level }, text(str))
 }
 
-function para(...inlines: (string | Node)[]) {
-  const content = inlines.map((i) => (typeof i === "string" ? text(i) : i))
-  return schema.nodes.paragraph.create(null, content)
+function para(...inlines: (string | Node[])[]) {
+  return schema.nodes.paragraph.create(null, inlines.flatMap((i) => (typeof i === "string" ? text(i) : i)))
 }
 
 /**
@@ -47,9 +55,10 @@ export interface SeedText {
   afterBreak: { title: string; paras: string[]; subtitle: string; subParas: string[] }
 }
 
-export const LANGUAGES = {
+export const LANGUAGES: Record<string, { label: string; text: SeedText; font?: "kruti" }> = {
   en: { label: "English", text: en as SeedText },
-  hi: { label: "हिन्दी", text: hi as SeedText },
+  hi: { label: "हिन्दी (Kruti Dev)", text: hi as SeedText, font: "kruti" },
+  "hi-unicode": { label: "हिन्दी (Unicode)", text: hi as SeedText },
   ml: { label: "മലയാളം", text: ml as SeedText },
   kn: { label: "ಕನ್ನಡ", text: kn as SeedText },
 }
@@ -57,6 +66,7 @@ export type Language = keyof typeof LANGUAGES
 
 export function buildSeedDoc(lang: Language = "en"): Node {
   const t = LANGUAGES[lang].text
+  kruti = LANGUAGES[lang].font === "kruti"
   const children: Node[] = []
 
   children.push(

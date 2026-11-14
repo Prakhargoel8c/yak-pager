@@ -91,6 +91,7 @@ const fontSize = {
   parseDOM: [
     {
       tag: "span[style]",
+      consuming: false,
       getAttrs(dom: string | HTMLElement) {
         const el = dom as HTMLElement
         const m = el.style.fontSize.match(/^(\d+(?:\.\d+)?)px$/)
@@ -103,7 +104,28 @@ const fontSize = {
   },
 }
 
+/** fontFamily mark: a CSS font-family list, rendered as an inline style. Not inclusive. */
+const fontFamily = {
+  attrs: { family: {} },
+  // Typing at the end of a Latin run in a Kruti Dev document is Kruti Dev
+  // again, not a continuation of the run.
+  inclusive: false,
+  parseDOM: [
+    {
+      tag: "span[style]",
+      consuming: false,
+      getAttrs(dom: string | HTMLElement) {
+        const family = (dom as HTMLElement).style.fontFamily
+        return family ? { family } : false
+      },
+    },
+  ],
+  toDOM(mark: Mark): DOMOutputSpec {
+    return ["span", { style: `font-family: ${mark.attrs.family}` }]
+  },
+}
+
 export const schema = new Schema({
   nodes: { doc, paragraph, heading, text, hard_break, horizontal_rule, pageBreak },
-  marks: { strong, em, fontSize },
+  marks: { strong, em, fontSize, fontFamily },
 })

@@ -67,7 +67,10 @@ const stats1 = await readStats()
 const chips1 = await readChips()
 ok(stats1.pages >= 4, `seed spans 4+ pages`, `pages=${stats1.pages}`)
 ok((chips1.other ?? 0) === 0, "no unexpected DOM mutations", `other=${chips1.other}`)
-ok((chips1.create ?? 0) > 0, "gap widgets created once at startup", `create=${chips1.create}`)
+// Summed over the startup passes: a web font finishing its load (Kruti Dev)
+// runs a later full pass, which reuses the widgets the first one created.
+const created = await page.evaluate(() => window.__pager.reflows.reduce((n, r) => n + (r.counts.create ?? 0), 0))
+ok(created > 0, "gap widgets created once at startup", `create=${created}`)
 // The print document lays text out in 816 - 2 x 96 = 624px; a wider screen
 // column wraps lines differently and print pages stop matching the screen.
 const column = await page.evaluate(() => {
