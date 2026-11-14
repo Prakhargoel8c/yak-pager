@@ -18,11 +18,16 @@
 import { Schema } from "prosemirror-model"
 import type { Node, Mark, DOMOutputSpec } from "prosemirror-model"
 import { nodes as basicNodes, marks as basicMarks } from "prosemirror-schema-basic"
+import { DEFAULT_MARGINS } from "./layout"
 
 const { text, hard_break, horizontal_rule } = basicNodes
 
-/** The document's base font (a key of FONTS in fonts.ts), applied to the whole editor. */
-const doc = { ...basicNodes.doc, attrs: { font: { default: "georgia" } } }
+/**
+ * The document's base font (a key of FONTS in fonts.ts), applied to the
+ * whole editor, and its page margins in inches (layout.ts). Both are
+ * authorial intent: changing them is an undoable step.
+ */
+const doc = { ...basicNodes.doc, attrs: { font: { default: "georgia" }, margins: { default: DEFAULT_MARGINS } } }
 const { strong, em } = basicMarks
 
 const ALIGN_VALUES = ["left", "center", "right", "justify"]

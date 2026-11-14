@@ -36,7 +36,7 @@ import { solve } from "./solver"
 import { startMeter, stopMeter } from "./apiMeter"
 import type { ApiCounts } from "./apiMeter"
 import type { SplitCandidate } from "./solver"
-import { CONTENT_H, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
+import { applyGeometry, makeGapWidgetDOM, marginsOf, pageGeometry, paintSheets, setPush } from "./layout"
 import { measureBlock } from "./measure"
 import { clearInlineBoxes, editorColumn, measureWithPretext } from "./pretextMeasure"
 import { clearCache as clearPretextCache } from "@chenglou/pretext"
@@ -230,10 +230,16 @@ export function paginationPlugin(
        */
       apply(tr: Transaction, prev: PaginationState): PaginationState {
         const full = tr.getMeta(paginationKey) as FullMeta | undefined
-        if (full?.type === "full") {
+        // New margins or base font change every block's layout, and the
+        // step that sets a doc attr maps no positions, so it would leave
+        // nothing dirty.
+        const docAttrsChanged =
+          tr.docChanged &&
+          (tr.before.attrs.margins !== tr.doc.attrs.margins || tr.before.attrs.font !== tr.doc.attrs.font)
+        if (full?.type === "full" || docAttrsChanged) {
           return {
             ...prev,
-            measurer: full.measurer ?? prev.measurer,
+            measurer: full?.measurer ?? prev.measurer,
             decos: prev.decos.map(tr.mapping, tr.doc),
             dirty: { from: 0, to: tr.doc.content.size },
             full: true,
@@ -460,6 +466,10 @@ export function paginationPlugin(
         // -------- (a) MEASURE: batched DOM reads, then nothing but reads --
         // All getBoundingClientRect calls happen before any write, so the
         // browser performs layout once, not interleaved read/write cycles.
+        // The document's margins set the column width Pretext reads and the
+        // page height the solver fills; the CSS follows them first.
+        const geometry = pageGeometry(marginsOf(view.state.doc.attrs.margins))
+        applyGeometry(stack, geometry)
         const blockEls = topBlockElements(view.dom)
         const column = usePretext ? editorColumn(view) : null
         const blocks: { pos: number; end: number; height: number; forced: boolean; splitCandidates?: SplitCandidate[] }[] = []
@@ -500,8 +510,9 @@ export function paginationPlugin(
         // -------- (b) SOLVE: pure, on numbers only ------------------------
         const { breaks: solved, pageStarts, fills } = solve(
           blocks.map((b) => ({ pos: b.pos, height: b.height, splits: b.splitCandidates })),
-          CONTENT_H,
-          blocks.filter((b) => b.forced).map((b) => b.pos)
+          geometry.contentH,
+          blocks.filter((b) => b.forced).map((b) => b.pos),
+          geometry.band
         )
         const breaks: BreakInfo[] = solved.map((s) => ({
           pos: s.pos,
@@ -513,7 +524,7 @@ export function paginationPlugin(
         // -------- (c) DECORATE: one meta-transaction ----------------------
         mo.takeRecords() // discard anything before this point
         const applyCalls = startMeter()
-        paintSheets(stack, pageStarts, fills)
+        paintSheets(stack, pageStarts, fills, geometry)
         view.dispatch(
           view.state.tr.setMeta(paginationKey, {
             type: "layout",

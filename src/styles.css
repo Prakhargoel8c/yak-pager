@@ -1,8 +1,10 @@
 /*
  * Page geometry must match src/layout.ts:
- *   sheet 816x1056 (8.5x11in @96dpi), margins 96px, content 864px tall,
- *   desk gap 24px, band 216px, SVG tile 832x1072 (8px bleed).
- * .paper-stack's padding-top is MARGIN + BLEED = 104px so that background
+ *   sheet 816x1056 (8.5x11in @96dpi), desk gap 24px, SVG tile 832x1072
+ *   (8px bleed). Margins come from the document (--margin-* on
+ *   .paper-stack, 96px by default): content height 1056 - top - bottom,
+ *   band bottom + 24 + top.
+ * .paper-stack's padding-top is margin-top + BLEED so that background
  * layer k's y-position equals the solver's pageStarts[k] exactly.
  */
 :root {
@@ -68,6 +70,46 @@ body {
   color: #6b7280;
 }
 
+.margins-control {
+  position: relative;
+}
+.margins-pop {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 260px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #c9ced7;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(31, 35, 40, 0.18);
+  font-size: 13px;
+}
+.margins-pop[hidden] {
+  display: none;
+}
+.margins-pop label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.margins-pop input {
+  width: 56px;
+  height: 28px;
+  border: 1px solid #c9ced7;
+  border-radius: 6px;
+  padding: 0 6px;
+}
+.margins-error {
+  grid-column: 1 / -1;
+  min-height: 1em;
+  color: #b42318;
+  font-size: 12px;
+}
+
 /* ---------- the paper ---------- */
 
 #app {
@@ -82,7 +124,14 @@ body {
      starts exactly at the content edge. */
   width: 816px;
   margin: 24px auto;
-  padding: 104px 8px 0; /* top = MARGIN + BLEED; JS sets padding-bottom */
+  /* Page margins (layout.ts applyGeometry sets them from the document's
+     margins attr; these are the 1in defaults). */
+  --margin-top: 96px;
+  --margin-right: 96px;
+  --margin-bottom: 96px;
+  --margin-left: 96px;
+  --content-h: 864px;
+  padding: calc(var(--margin-top) + 8px) 8px 0; /* top = margin + BLEED; JS sets padding-bottom */
   box-sizing: content-box;
   background-repeat: no-repeat;
   background-size: 832px 1072px; /* the SVG tile */
@@ -99,8 +148,8 @@ body {
   outline: none;
 }
 
-/* The editor spans the full 816px sheet; its horizontal 96px padding is the
-   page margin. NO vertical padding, NO border, NO margins on blocks — the
+/* The editor spans the full 816px sheet; its horizontal padding is the
+   page's left and right margin. NO vertical padding, NO border, NO margins on blocks — the
    flow must start exactly at the first page's content origin, and block
    spacing must live inside the measured boxes (padding), where margin
    collapsing cannot touch it. */
@@ -109,8 +158,8 @@ body {
   font-size: 16px;
   line-height: 1.5;
   color: var(--ink);
-  padding: 0 96px;
-  min-height: 864px;
+  padding: 0 var(--margin-right) 0 var(--margin-left);
+  min-height: var(--content-h);
   caret-color: var(--accent);
 }
 
@@ -178,7 +227,8 @@ body {
 }
 
 /* ---------- the gap widget band ----------
-   The widget IS the inter-page space: its box height is band (216px) plus
+   The widget IS the inter-page space: its box height is the band (bottom
+   margin + 24px desk + top margin, 216px at 1in margins) plus
    --push (the ragged space left on the page above), so the block after it
    flows to the next page's content start with NO margin of its own —
    pagination never touches block DOM. Its absolutely positioned children
@@ -187,7 +237,7 @@ body {
    the break moves* — only its insertion position does. */
 .page-gap {
   position: relative;
-  height: calc(216px + var(--push, 0px));
+  height: calc(var(--margin-bottom) + 24px + var(--margin-top) + var(--push, 0px));
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
@@ -196,16 +246,16 @@ body {
 .page-gap .gap-rule {
   position: absolute;
   top: var(--push, 0px);
-  left: -96px;
-  right: -96px;
+  left: calc(-1 * var(--margin-left));
+  right: calc(-1 * var(--margin-right));
   border-top: 1px dashed rgba(26, 115, 232, 0.45);
 }
 .page-gap .gap-num {
   position: absolute;
   top: var(--push, 0px);
-  height: 96px; /* the bottom margin of the sheet above */
-  left: -96px;
-  right: -96px;
+  height: var(--margin-bottom); /* the bottom margin of the sheet above */
+  left: calc(-1 * var(--margin-left));
+  right: calc(-1 * var(--margin-right));
   display: flex;
   align-items: center;
   justify-content: center;

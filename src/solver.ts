@@ -31,7 +31,7 @@
  * accumulation logic in exactly one pure place.
  */
 
-/** Visual height of the band between two pages: bottom margin + desk gap + top margin. */
+/** Visual height of the band between two pages at 1in margins: bottom margin + desk gap + top margin. */
 export const BAND = 216
 
 /** Fewest lines that must stay behind a split (orphan control). */
@@ -104,7 +104,7 @@ function pickSplit(
   return undefined
 }
 
-export function solve(blocks: Block[], pageHeight: number, forcedBreaks: number[] = []): Solution {
+export function solve(blocks: Block[], pageHeight: number, forcedBreaks: number[] = [], band = BAND): Solution {
   const forced = new Set(forcedBreaks)
   const breaks: PageBreak[] = []
   const pageStarts: number[] = [0]
@@ -133,7 +133,7 @@ export function solve(blocks: Block[], pageHeight: number, forcedBreaks: number[
         const fill = h + (s.cand.height - placed)
         breaks.push({ pos: s.cand.pos, remaining: pageHeight - fill })
         fills.push(fill)
-        start += pageHeight + BAND // a split never overflows: fill <= pageHeight
+        start += pageHeight + band // a split never overflows: fill <= pageHeight
         pageStarts.push(start)
         h = 0
         placed = s.cand.height
@@ -143,14 +143,17 @@ export function solve(blocks: Block[], pageHeight: number, forcedBreaks: number[
       }
 
       // No split available (atomic block, or nothing fits the minimums):
-      // push the rest whole — or, on an empty page, place it anyway so an
-      // oversized atomic block gets a page to itself rather than a loop.
+      // push the rest to a fresh page and try again there, where a part
+      // taller than a page can still split — or, on an empty page, place it
+      // anyway so an oversized atomic block gets a page to itself rather
+      // than a loop.
       if (h > 0) {
         breaks.push({ pos: segPos, remaining: Math.max(0, pageHeight - h) })
         fills.push(h)
-        start += Math.max(h, pageHeight) + BAND
+        start += Math.max(h, pageHeight) + band
         pageStarts.push(start)
         h = 0
+        continue
       }
       h += rest
       break
@@ -161,7 +164,7 @@ export function solve(blocks: Block[], pageHeight: number, forcedBreaks: number[
     if (forced.has(b.pos) && i + 1 < blocks.length) {
       breaks.push({ pos: blocks[i + 1].pos, remaining: Math.max(0, pageHeight - h) })
       fills.push(h)
-      start += Math.max(h, pageHeight) + BAND
+      start += Math.max(h, pageHeight) + band
       pageStarts.push(start)
       h = 0
     }
