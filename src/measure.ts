@@ -1,43 +1,24 @@
 /**
- * (a) MEASURE helpers — batched DOM reads only.
- *
- * Measure one block: its height (minus any gap widgets already inside it)
- * plus, for paragraphs, the line-boundary split candidates the solver uses.
- * Split positions are stored RELATIVE to the paragraph's content start, so
- * a cached measurement stays correct when insertions elsewhere in the
- * document shift the paragraph's doc positions.
+ * The DOM measurer: a block's rendered height and, for a paragraph, its
+ * line-boundary split candidates, read with Ranges. A paragraph that
+ * straddles a page holds its gap widget between passes, so the widget's box
+ * is subtracted from the height and from every line below it; re-measuring
+ * then reproduces the same numbers and reflow stays idempotent.
  */
 import type { EditorView } from "prosemirror-view"
 import type { SplitCandidate } from "./solver"
 import type { Unit } from "./units"
 
 /**
- * One measured top-level block: height plus, for paragraphs, split
- * candidates. Split positions are stored RELATIVE to the paragraph's
- * content start: a cache hit after an insertion elsewhere in the document
- * must survive it, and doc positions inside the node shift while the
- * node-local offsets do not. The pass converts them back to absolute doc
- * positions with the unit's current content start.
+ * Split positions are relative to the paragraph's content start: an
+ * insertion elsewhere in the document keeps the node (and its cached
+ * measurement) while shifting its doc positions.
  */
 export interface MeasuredBlock {
   height: number
   splitCandidates: SplitCandidate[] | null
 }
 
-/**
- * Measure one block. Two things make this re-runnable on a paragraph that
- * already contains its own gap widget (which is every paragraph that
- * currently straddles a page — the widget stays in the DOM between passes):
- *
- *  1. The widget's box is inter-page space, not paragraph content, so its
- *     height is subtracted from the block's rect. Without this, pass N+1
- *     would see a taller paragraph than pass N and move the break — the
- *     opposite of idempotence.
- *  2. Words below the widget sit lower than the paragraph's own layout
- *     puts them; measureSplitCandidates subtracts the widget space above
- *     each line, so candidates describe the paragraph as if it were not
- *     split and pass N+1 reproduces the same numbers.
- */
 export function measureBlock(view: EditorView, el: HTMLElement | null, unit: Unit): MeasuredBlock {
   if (!el) return { height: 0, splitCandidates: null }
   const rect = el.getBoundingClientRect()
@@ -45,12 +26,9 @@ export function measureBlock(view: EditorView, el: HTMLElement | null, unit: Uni
     el.querySelectorAll<HTMLElement>(".page-gap"),
     (w) => w.getBoundingClientRect()
   )
-  // A widget's box is inter-page space, so it is subtracted from the
-  // block's rect — but only while the rect actually contains it. An
-  // in-paragraph widget is a float, and a paragraph's height spans a
-  // float's box only while a line of text sits below the float. An edit
-  // that deletes everything after the widget inside its paragraph
-  // leaves the float anchored at the paragraph's end with no line below it.
+  // A float's box counts toward the paragraph's height only while a line of
+  // text sits below it; deleting everything after the widget leaves it
+  // overhanging the paragraph's rect, where it was never part of the height.
   const widgetRects = allRects.filter((r) => r.bottom <= rect.bottom + 1)
   let height = rect.height
   for (const r of widgetRects) height -= r.height
@@ -59,18 +37,13 @@ export function measureBlock(view: EditorView, el: HTMLElement | null, unit: Uni
   return { height, splitCandidates: splits }
 }
 
-/** A word's rendered rect plus where it lives in the DOM. */
 interface WordRect {
   node: Text
   start: number
   rect: DOMRect
 }
 
-/**
- * All words in a paragraph with their rects, in document order. Text inside
- * gap widgets is skipped: the widget's page number is decoration, not
- * content, and MEASURE must never read it as a word.
- */
+/** Every word's rect, in document order. The gap widget's page number is decoration, not a word. */
 function paragraphWords(el: HTMLElement): WordRect[] {
   const out: WordRect[] = []
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
@@ -95,18 +68,15 @@ function paragraphWords(el: HTMLElement): WordRect[] {
   return out
 }
 
-/** One visual line of a paragraph: its top edge and its first word. */
 interface LineRect {
   top: number
   firstWord: WordRect
 }
 
 /**
- * Group words into visual lines, keeping each line's top edge (the highest
- * word top — baseline alignment puts a larger font higher) and first word.
- * Two words share a line when their rects overlap vertically by more than
- * half the shorter one, which stays correct when a font-size mark shares a
- * line with normal text.
+ * Words grouped into visual lines. Two words share a line when their rects
+ * overlap vertically by more than half the shorter one, which holds when a
+ * font-size mark shares a line with normal text.
  */
 function lineRects(el: HTMLElement): LineRect[] {
   const words = paragraphWords(el)
@@ -130,27 +100,18 @@ function lineRects(el: HTMLElement): LineRect[] {
   }
   return lines.map((ws) => ({
     top: Math.min(...ws.map((w) => w.rect.top)),
-    // paragraphWords is in document order, so the line's first word is the
-    // earliest one, not the leftmost: in right-to-left text that is the last.
+    // The earliest word in document order, not the leftmost: in right-to-left text that is the last.
     firstWord: ws.reduce((a, b) => (order.get(b)! < order.get(a)! ? b : a)),
   }))
 }
 
 /**
- * Line-boundary split candidates for one paragraph, in reading order: for
- * every visual line after the first, the doc position of the line's first
- * word and the height from the paragraph's top to that line's LINE-BOX top.
- *
- * Why the line-box top and not the word's rect top: the widget renders as a
- * float, and the browser places a float's top edge exactly at the carried
- * line's line-box top (verified by tests/spike.mjs). Reporting that same
- * quantity is what makes the carried line land pixel-exactly on the next
- * page's content start. The line-box top is the highest em-box top on the
- * line minus the paragraph's half-leading, which is measured from the
- * first line: its line box starts at the paragraph's content top. For a
- * line whose own font is larger than the paragraph's, this is off by the
- * extra leading — a few px at most, and only when a font-size mark is
- * carried onto the new page.
+ * One candidate per line after the first: the line's first word and the
+ * height from the paragraph's top to the line's line-box top, which is where
+ * the browser puts a float's top edge. The line-box top is the word's em-box
+ * top less the half-leading measured on the first line, so a line in a
+ * larger font is off by its extra leading (a few px, only when a font-size
+ * mark is carried onto the new page).
  */
 function measureSplitCandidates(
   view: EditorView,
@@ -162,9 +123,6 @@ function measureSplitCandidates(
   const lines = lineRects(el)
   if (lines.length < 2) return null
 
-  /** Widget space sitting above a given viewport y — subtracted from the
-   *  heights of every line below it. A widget's top edge sits above the em
-   *  boxes of the line it carries, so `r.top < top` separates cleanly. */
   const widgetOffset = (top: number) => {
     let off = 0
     for (const r of widgetRects) if (r.top < top) off += r.height
@@ -176,9 +134,6 @@ function measureSplitCandidates(
   for (let i = 1; i < lines.length; i++) {
     const L = lines[i]
     out.push({
-      // Node-local offset: contentStart is added back by the pass, so a
-      // cached candidate stays correct when insertions elsewhere shift
-      // the paragraph's doc positions.
       pos: view.posAtDOM(L.firstWord.node, L.firstWord.start) - contentStart,
       height: L.top - pRect.top - widgetOffset(L.top) - leading,
     })

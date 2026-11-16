@@ -1,47 +1,32 @@
 /**
- * UNITS — what pagination places. One walk over the document decides what a
- * unit is, where it starts and ends, and how the solver may treat it:
- *
- *   splittable  may break at a line boundary (a paragraph)
- *   atomic      moves whole (a heading, a rule, a table row)
- *   forced      ends its page after itself (an explicit page break)
- *
- * Lists are walked into: every block of every item is a unit of its own,
- * indented LIST.indent per level, so a paragraph deep in a list still splits
- * at a line boundary. A block that is the first content of its item (and of
- * its list) starts its unit where that item or list starts, so a break
- * before it falls before the item, never between an item and its marker.
- *
- * A top-level table is placed row by row, so a page may end between two rows
- * but never inside one; its first row's unit starts at the table, and the
- * table's top border and the space below it are the first and last rows'
- * `extra`. A table with a rowspan, or one inside a list, moves whole.
- *
- * The pass, the Pretext/DOM comparison and the print cutter all walk the
- * document through here.
+ * What pagination places: one walk over the document into the units the
+ * solver stacks. Lists are walked into and a table is placed row by row; a
+ * block that opens its item, list or table starts its unit there, so a break
+ * before it falls before the container (an item is never parted from its
+ * marker). The pass, the Pretext/DOM comparison and the print cutter all
+ * walk the document through here.
  */
 import type { Node as PMNode } from "prosemirror-model"
 import { TableMap } from "prosemirror-tables"
 import { LIST, TABLE } from "./typography"
 
+/** splittable: may break at a line boundary. atomic: moves whole. forced: ends its page after itself. */
 export type UnitKind = "splittable" | "atomic" | "forced"
 
 export interface Unit {
   node: PMNode
-  /** Doc position of the unit's start: the node's, or an enclosing item's, list's or table's it opens. */
+  /** Where the unit starts: the node, or the item, list or table it opens. */
   pos: number
-  /** Doc position of the node itself. */
+  /** Where the node itself is. */
   at: number
-  /** Doc position just after the unit. */
   end: number
-  /** Doc position of the unit's first content; split candidates are relative to it. */
+  /** Split candidates are relative to this. */
   contentStart: number
   kind: UnitKind
-  /** How far the unit is indented from the column, in px (list levels). */
+  /** Indent from the column in px: LIST.indent per enclosing list. */
   inset: number
-  /** For a table row: its table and index. */
   row?: { table: PMNode; index: number }
-  /** Height the unit has beyond its node's own box (a table's border and tail). */
+  /** Height beyond the node's own box: a table's top border and tail, on its first and last row. */
   extra: number
 }
 

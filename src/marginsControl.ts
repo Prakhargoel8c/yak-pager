@@ -1,9 +1,4 @@
-/**
- * Page margins: a toolbar menu of presets plus custom values in inches.
- * Margins are the doc node's `margins` attr, so a change is one undoable
- * step; the pagination plugin re-measures the whole document when it sees
- * the attr change.
- */
+/** Page margins: presets plus custom values in inches, stored as the doc's `margins` attr (one undoable step). */
 import type { Command, EditorState } from "prosemirror-state"
 import type { EditorView } from "prosemirror-view"
 import { MIN_CONTENT_IN, PX_PER_IN, SHEET_H, SHEET_W, marginsOf } from "./layout"
@@ -22,7 +17,6 @@ const sameMargins = (a: Margins, b: Margins) => SIDES.every((s) => a[s] === b[s]
 
 const docMargins = (state: EditorState): Margins => marginsOf(state.doc.attrs.margins)
 
-/** Why a set of margins can't be used, or null when it can. */
 function marginsError(m: Margins): string | null {
   if (!SIDES.every((s) => Number.isFinite(m[s]) && m[s] >= 0)) return "Margins must be 0 or more inches."
   if (SHEET_H / PX_PER_IN - m.top - m.bottom < MIN_CONTENT_IN) return `Top + bottom must leave at least ${MIN_CONTENT_IN}in of page.`

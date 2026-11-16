@@ -1,21 +1,8 @@
 /**
- * E2E verification (run: npm run e2e) — checks the exercise's three claims
- * in a real browser:
- *
- *   1. The seed spans 4+ pages, breaks computed, no "other" DOM mutations.
- *   2. Idempotence: forcing a full re-measure of a stable layout performs
- *      ZERO DOM operations (the panel's own MutationObserver says so).
- *   3. Rule 1: pagination never enters the undo stack. Type N characters,
- *      press Ctrl+Z exactly once — the typed text is gone and the document
- *      is byte-for-byte the seed again (if pagination had history events,
- *      the first undo would undo a reflow instead, and the text would stay).
- *   4. Rule 3: typing that moves a break logs insertBefore + setAttribute
- *      ops only — no creates, removes, or "other".
- *   5. Justified text: every line but the last sits flush at the right
- *      margin — including the lines around a gap widget in a paragraph
- *      that splits across a page, applied through the real toolbar.
- *
- * Requires google-chrome on PATH and a build (npm run build).
+ * E2E (npm run build && npm run e2e; E2E_QUERY=?lang=… picks the document):
+ * idempotence, undo never touching pagination, reflow reusing widgets,
+ * pixel-exact landing, justified text across a split, tables and lists.
+ * Requires google-chrome on PATH (or CHROME=/path/to/chrome).
  */
 import { spawn } from "node:child_process"
 import puppeteer from "puppeteer-core"
@@ -42,7 +29,6 @@ page.on("console", (m) => {
   if (m.type() === "error") console.log("  [console.error]", m.text())
 })
 
-// E2E_QUERY=?measure=dom runs the suite with the DOM measurer.
 await page.goto(`http://localhost:4179/${process.env.E2E_QUERY ?? ""}`, { waitUntil: "networkidle0" })
 await sleep(1200) // initial pass + fonts.ready-triggered full pass
 
@@ -61,7 +47,7 @@ const readStats = () =>
     breaks: [...document.querySelectorAll(".breaks div")].textContent ?? "",
   }))
 const lastPass = () => page.evaluate(() => window.__pager.reflows.at(-1)?.pass ?? 0)
-/** DOM operation counts summed over every pass after `pass`: an action of several keystrokes spans several passes. */
+/** DOM operation counts summed over every pass after `pass`: a pass runs per keystroke. */
 const opsSince = (pass) =>
   page.evaluate((after) => {
     const sum = {}
@@ -70,7 +56,7 @@ const opsSince = (pass) =>
     }
     return sum
   }, pass)
-/** Every widget's box must end exactly at the next page's content start, block-level and in-paragraph alike. */
+/** Every widget's box must end exactly at the next page's content start. */
 const checkLanding = async (prefix) => {
   const landing = await page.evaluate(() => {
     const { view, layout } = window.__pager
@@ -94,12 +80,10 @@ const stats1 = await readStats()
 const chips1 = await readChips()
 ok(stats1.pages >= 4, `seed spans 4+ pages`, `pages=${stats1.pages}`)
 ok((chips1.other ?? 0) === 0, "no unexpected DOM mutations", `other=${chips1.other}`)
-// Summed over the startup passes: a web font finishing its load (Kruti Dev)
-// runs a later full pass, which reuses the widgets the first one created.
+// Summed over the startup passes: a font load runs a later full pass that reuses the widgets.
 const created = await page.evaluate(() => window.__pager.reflows.reduce((n, r) => n + (r.counts.create ?? 0), 0))
 ok(created > 0, "gap widgets created once at startup", `create=${created}`)
-// The print document lays text out in the geometry's column; a wider screen
-// column wraps lines differently and print pages stop matching the screen.
+// Print lays text out in the geometry's column; a wider screen column would wrap differently.
 const column = await page.evaluate(() => {
   const ed = window.__pager.view.dom
   const cs = getComputedStyle(ed)
@@ -118,7 +102,6 @@ const after = await page.evaluate(() => document.querySelector(".paper-stack")?.
 ok(before === after, "editor DOM byte-identical before/after re-run")
 
 console.log("— rule 1: undo undoes typing, never pagination")
-// Put the caret at the very end of the document.
 await page.evaluate(() => {
   const pm = document.querySelector(".ProseMirror")
   const last = pm.lastElementChild
@@ -151,8 +134,7 @@ ok(
   "one Ctrl+Z removed exactly the typed text",
   textAfter.slice(-40)
 )
-// A second Ctrl+Z must do nothing: the seed predates history, and pagination
-// never occupied an undo slot. If it did, this would delete seed content.
+// The seed predates history: a second Ctrl+Z must do nothing.
 await page.keyboard.down("Control")
 await page.keyboard.press("KeyZ")
 await page.keyboard.up("Control")
@@ -161,9 +143,7 @@ const textAfter2 = await page.evaluate(() => document.querySelector(".ProseMirro
 ok(textAfter2 === textAfter, "second Ctrl+Z was a no-op (no pagination in undo stack)")
 
 console.log("— rule 3: break movement reused widgets, did not rebuild")
-// Insert new paragraphs mid-document: content below shifts, so an existing
-// break moves to a different block. The pooled widget must be re-inserted
-// (insertBefore), never rebuilt.
+// Content below shifts, so an existing break moves to a different block.
 await page.evaluate(() => {
   const ps = [...document.querySelectorAll(".ProseMirror > p")]
   const mid = ps[Math.floor(ps.length / 2)]
@@ -195,11 +175,7 @@ ok(
 )
 
 console.log("— typing inside a paragraph that straddles a page boundary")
-// The scenario the split feature exists for: caret at the end of the
-// paragraph that currently contains a gap widget (it straddles a page),
-// then type. The split may move by a line or stay put — either way the
-// reflow may only reuse widgets (insertBefore + text re-splits + --push
-// writes), and the landing checks below verify the new geometry exactly.
+// Type at the end of the paragraph that holds a gap widget: the split may move or stay put.
 await page.evaluate(() => {
   const p = [...document.querySelectorAll(".ProseMirror p")].find((el) =>
     el.querySelector(".page-gap")
@@ -222,10 +198,7 @@ ok(
   `create=${chips4.create} remove=${chips4.remove}`
 )
 
-// Placement: each widget must sit immediately before the content that
-// begins the page after its break — that content may be a block OR a word
-// inside a paragraph, so resolve the DOM point at break.pos and check the
-// widget is its previous element sibling.
+// Each widget sits immediately before its break's content, a block or a word.
 const placement = await page.evaluate(() => {
   const { view, layout } = window.__pager
   const s = view.state
@@ -256,9 +229,7 @@ ok(placement.inline, "at least one break splits a paragraph mid-text (inline pos
 await checkLanding("")
 
 console.log("— justified text: flush lines, including across a page split")
-// Word rects grouped into visual lines — the same measuring method the
-// pagination plugin uses. A justified paragraph must put every line except
-// its last flush at the paragraph's right edge; the last line stays ragged.
+// Word rects grouped into visual lines; every line but the last must be flush right.
 const measureJustified = (mode) =>
   page.evaluate((mode) => {
     const ps = [...document.querySelectorAll(".ProseMirror p")]
@@ -271,8 +242,6 @@ const measureJustified = (mode) =>
     const words = []
     let tn
     while ((tn = walker.nextNode())) {
-      // The gap widget renders its own page number — decoration, not text.
-      // Skip it, the same way the plugin's measurement does.
       if (tn.parentElement?.closest(".page-gap")) continue
       const s = tn.textContent || ""
       const re = /\S+/g
@@ -318,7 +287,6 @@ const measureJustified = (mode) =>
     }
   }, mode)
 
-// 5a. The seed's justified paragraph: flush everywhere but the last line.
 const seedJust = await measureJustified("seed")
 ok(seedJust.error === null, "seed's justified paragraph is in the DOM (toDOM wrote the style)")
 ok(seedJust.justified && seedJust.lineCount >= 2, `justified paragraph wraps to ${seedJust.lineCount} lines`)
@@ -333,8 +301,7 @@ ok(
   `last line right edge ${(seedJust.right - seedJust.lastRight).toFixed(1)}px short`
 )
 
-// 5b. Justify a paragraph that straddles a page boundary, through the real
-// toolbar control, and check the lines on both sides of the gap widget.
+// Justify a paragraph that straddles a page boundary, through the toolbar.
 await page.evaluate(() => {
   const p = [...document.querySelectorAll(".ProseMirror p")].find((el) =>
     el.querySelector(".page-gap")
@@ -364,15 +331,8 @@ ok(
 )
 
 console.log("— regression: an edit that strands a widget at a paragraph's end")
-// The bug this guards against: deleting everything after a widget inside a
-// straddling paragraph leaves the widget's float anchored at the
-// paragraph's end with no line of text below it, so the float overhangs the
-// paragraph's rect. measureBlock used to subtract the widget's box from a
-// rect that never contained it, measuring the paragraph roughly 216px
-// shorter than it is (a negative number for a short one). The solve then
-// pulled later blocks up across page boundaries, and the layout stayed
-// wrong until the re-run button forced a full re-measure. The fix: only
-// widget rects contained in the block's rect are subtracted.
+// Deleting everything after a widget inside a straddling paragraph leaves its
+// float overhanging the paragraph's rect; measureBlock must not subtract it.
 const stranded = await page.evaluate(() => {
   const { view, layout } = window.__pager
   let idx = -1
@@ -383,8 +343,6 @@ const stranded = await page.evaluate(() => {
   const b = layout.breaks[idx]
   const $p = view.state.doc.resolve(b.pos)
   view.dispatch(view.state.tr.delete(b.pos, $p.end()))
-  // The state the next pass will measure: the widget now overhangs
-  // the paragraph's rect — the pre-condition of the bug.
   const w = view.dom.querySelector(`.page-gap[data-page="${idx}"]`)
   const p = w && w.closest("p")
   if (!w || !p) return { error: "widget not inside a paragraph after the delete" }
@@ -408,7 +366,6 @@ ok(
   `pass=${JSON.stringify(strandedPass)} rerun=${JSON.stringify(strandedRerun)}`
 )
 await checkLanding("stranded-widget layout: ")
-// Put the deleted text back so the suite ends near its old document.
 await page.evaluate(() => window.__pager.view.focus())
 await page.keyboard.down("Control")
 await page.keyboard.press("KeyZ")
@@ -416,10 +373,7 @@ await page.keyboard.up("Control")
 await sleep(900)
 
 console.log("— regression: a mark change re-measures the paragraph")
-// Adding or removing a mark (fontSize, strong, em) maps no positions, so
-// tr.changedRange() is null for it. The pass used to see no dirty range and
-// never ran: a paragraph made larger near a page's bottom overflowed into
-// the gap and the next page until something else triggered a pass.
+// A mark step maps no positions, so tr.changedRange() is null; the pass must still run.
 const markBefore = await page.evaluate(() => {
   const { view, layout } = window.__pager
   const b = layout.breaks[0]
@@ -447,8 +401,6 @@ ok(
 )
 
 console.log("— page numbers are never part of a selection")
-// The number is drawn by CSS from data-num, so a selection that crosses a
-// page boundary (and anything copied from it) holds only document text.
 const acrossBreak = await page.evaluate(() => {
   const { view, layout } = window.__pager
   const b = layout.breaks[0]
@@ -459,9 +411,8 @@ const acrossBreak = await page.evaluate(() => {
   return { dom, doc, numbers: [...view.dom.querySelectorAll(".gap-num")].map((n) => n.textContent).join("") }
 })
 ok(acrossBreak.numbers === "", "page numbers have no text in the DOM", JSON.stringify(acrossBreak.numbers))
-// From the first space to the last on both sides: the ±40 ends can fall
-// inside a grapheme cluster (a Malayalam vowel sign), which the browser's
-// selection snaps to a whole cluster.
+// From the first space to the last: the ±40 ends can fall inside a grapheme
+// cluster (a Malayalam vowel sign), which the selection snaps to whole.
 const words = (t) => t.slice(t.indexOf(" "), t.lastIndexOf(" ")).trim()
 ok(
   words(acrossBreak.dom) === words(acrossBreak.doc),
@@ -476,8 +427,7 @@ const rowBreak = () =>
   })
 if ((await rowBreak()) >= 0) {
   console.log("— tables: typing in the last row on a page")
-  // The row before a gap row grows until it no longer fits, and moves to
-  // the next page whole: the reflow moves the pooled gap row, nothing else.
+  // The row before a gap row grows until it no longer fits and moves whole.
   const k = await rowBreak()
   await page.evaluate((k) => {
     const { view } = window.__pager
@@ -513,8 +463,7 @@ const nestedItem = await page.evaluate(() => {
 })
 if (nestedItem != null) {
   console.log("— lists: Tab and Shift-Tab re-paginate")
-  // Sinking an item narrows every line of it by one indent, so its lines
-  // re-wrap and the breaks below move: the reflow only reuses widgets.
+  // Sinking an item narrows its lines by one indent, so the breaks below move.
   await page.evaluate((at) => {
     const { view } = window.__pager
     view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, at)))

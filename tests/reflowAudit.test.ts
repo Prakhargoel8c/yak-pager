@@ -1,7 +1,4 @@
-/**
- * classify() over synthetic mutation records: the node-shaped objects below
- * carry only what classify reads, so this runs without a DOM.
- */
+/** classify() over synthetic records: the node-shaped objects carry only what it reads. */
 import { describe, it, expect } from "vitest"
 import { classify } from "../src/reflowAudit"
 

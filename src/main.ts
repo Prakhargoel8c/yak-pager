@@ -22,19 +22,13 @@ import { FONTS, docFont } from "./fonts"
 import type { Layout, PageGeometry } from "./layout"
 import "./styles.css"
 
-// Paragraphs and headings are measured with Pretext; ?measure=dom reads them from the DOM instead.
 const params = new URLSearchParams(location.search)
 const measurer: MeasurerKind = params.get("measure") === "dom" ? "dom" : "pretext"
-// ?lang=hi|hi-unicode|mixed|ml|kn|table|list loads the seed document in Hindi (Kruti
-// Dev or Unicode), English mixed with Kruti Dev, Malayalam (Gayathri) or
-// Kannada, or English with tables or lists; English otherwise.
 const langParam = params.get("lang") ?? ""
 const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 
-// Count costly browser calls in each pagination pass, for the dev panel.
 installApiMeter()
 
-// Block typography, from the one table print and Pretext also use.
 const typography = document.createElement("style")
 typography.textContent = typographyCSS("#paper .ProseMirror", FONTS.georgia.family)
 document.head.append(typography)
@@ -44,8 +38,7 @@ const panel = createDevPanel(document.getElementById("panel")!)
 
 let toolbar: { sync: () => void } | null = null
 
-// The last 200 pass reports, for tests: a pass runs per transaction, so an
-// action of several keystrokes spans several passes.
+// The last 200 pass reports, for tests.
 const reflows: ReflowReport[] = []
 const onReflow = (r: ReflowReport) => {
   reflows.push(r)
@@ -73,9 +66,7 @@ const view = new EditorView(paperHost, {
       paginationPlugin({ onReflow, measurer }),
     ],
   }),
-  // The document's base font is its doc node's `font` attr. Kruti Dev text
-  // is ASCII underneath ("fd" is कि): spellcheck would flag every word and
-  // autocorrect would rewrite keystrokes.
+  // Kruti Dev text is ASCII underneath: spellcheck would flag every word and autocorrect rewrite keystrokes.
   attributes: (state): Record<string, string> => {
     const font = docFont(state)
     const attrs: Record<string, string> = { style: `font-family: ${FONTS[font].family}` }
@@ -94,7 +85,6 @@ buildPrintPreviewButtons(view, document.getElementById("toolbar")!)
 document.getElementById("toolbar")!.append(measurerSelect(), languageSelect())
 panel.attach(view)
 
-// Poke at the editor from the console: window.__pager.view.state.doc, ...
 // The tests read the layout and geometry from here.
 ;(window as unknown as {
   __pager: {
@@ -122,7 +112,6 @@ panel.attach(view)
   compareWithDom: () => compareWithDom(view),
 }
 
-/** Switches the measurer live and keeps ?measure= in the URL, so a reload keeps the choice. */
 function measurerSelect(): HTMLSelectElement {
   const sel = document.createElement("select")
   sel.title = "How paragraphs and headings are measured"
@@ -141,11 +130,7 @@ function measurerSelect(): HTMLSelectElement {
   return sel
 }
 
-/**
- * Loads the seed document in another language as a fresh editor state (its
- * own undo history; switching language is not an edit), keeps ?lang= in the
- * URL, and re-paginates with whichever measurer is selected now.
- */
+/** A fresh editor state: switching language is not an edit, so it gets its own undo history. */
 function languageSelect(): HTMLSelectElement {
   const sel = document.createElement("select")
   sel.title = "Document language"
@@ -168,17 +153,15 @@ function languageSelect(): HTMLSelectElement {
   return sel
 }
 
-// Heights can change without the document changing: fonts settling, images
-// loading, the window resizing. Each triggers a full re-measure through a
-// meta-transaction; the pass itself stays idempotent.
-// A web font (Kruti Dev) starts loading when text first uses it, after
-// document.fonts.ready may already have resolved, hence loadingdone too.
+// Heights change without the document changing: fonts, images, resize. A web
+// font starts loading when text first uses it, after document.fonts.ready
+// may have resolved, hence loadingdone too.
 if (typeof document !== "undefined" && "fonts" in document) {
   document.fonts.ready.then(() => requestFullRecompute(view))
   document.fonts.addEventListener("loadingdone", () => requestFullRecompute(view))
 }
 window.addEventListener("resize", () => requestFullRecompute(view))
-// Capture phase: <load> does not bubble, and it fires on descendants.
+// Capture phase: <load> does not bubble.
 paperHost.addEventListener(
   "load",
   (e) => {

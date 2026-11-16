@@ -1,10 +1,4 @@
-/**
- * Alignment (left/center/right/justify) at the schema and command level.
- * These run in a node environment, so there is no DOM here: they check the
- * attr, its serialization, and the command's transactions. The DOM side
- * (inline style in, text-align out, flush justified lines) is covered by
- * tests/e2e.mjs.
- */
+/** Alignment at the schema and command level; the DOM side is in tests/e2e.mjs. */
 import { describe, it, expect } from "vitest"
 import { EditorState, TextSelection, NodeSelection } from "prosemirror-state"
 import type { Command } from "prosemirror-state"
@@ -13,7 +7,6 @@ import { schema } from "../src/schema"
 import { buildSeedDoc } from "../src/seed"
 import { setAlign } from "../src/toolbar"
 
-/** Run a command against a state and return the state it produced (or null). */
 function run(cmd: Command, state: EditorState): EditorState | null {
   let next: EditorState | null = null
   cmd(state, (tr) => {
@@ -52,7 +45,6 @@ describe("align attr", () => {
 describe("setAlign", () => {
   const doc = buildSeedDoc()
 
-  // First heading and the paragraph right after it, for a mixed selection.
   const positions: Record<string, number> = {}
   doc.descendants((node: PMNode, pos: number) => {
     if (positions.heading == null && node.type.name === "heading") positions.heading = pos
@@ -71,8 +63,7 @@ describe("setAlign", () => {
     next!.doc.nodesBetween(from, to, (node: PMNode) => {
       if (node.isTextblock) seen.push({ name: node.type.name, level: node.attrs.level, align: node.attrs.align })
     })
-    // The heading must still be a heading (a blanket setBlockType would have
-    // flattened it into a paragraph) with its level intact.
+    // A blanket setBlockType would have flattened the heading into a paragraph.
     expect(seen[0]).toEqual({ name: "heading", level: 1, align: "center" })
     expect(seen.some((b) => b.name === "paragraph" && b.align === "center")).toBe(true)
   })
@@ -83,7 +74,6 @@ describe("setAlign", () => {
     const next = run(setAlign("right"), state)
     expect(next!.doc.resolve(caret).parent.attrs.align).toBe("right")
     expect(next!.doc.resolve(caret).parent.attrs.align).not.toBe(state.doc.resolve(caret).parent.attrs.align)
-    // The block before the caret is untouched.
     expect(state.doc.resolve(positions.heading + 1).parent.attrs.align).toBe("left")
   })
 

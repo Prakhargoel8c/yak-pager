@@ -1,16 +1,8 @@
 /**
- * Unicode Hindi to Kruti Dev 010, the legacy font Indian courts type in.
- *
- * Kruti Dev is not a Unicode font: it draws Devanagari glyphs at Latin code
- * points ("d" is क, "f" is the ि matra), so the text has to be re-encoded,
- * and the font only shows Hindi for text written in its encoding. Two
- * Devanagari rules become reorderings in that encoding: the ि matra is typed
- * before its consonant cluster, and a reph (र् before a cluster) after the
- * syllable, as "Z".
- *
- * Kruti Dev has no Latin letters of its own, so splitKrutiRuns keeps Latin
- * words, digits and the punctuation it lacks as separate runs for the
- * document's other font.
+ * Unicode Hindi to Kruti Dev 010, the legacy font Indian courts type in. It
+ * draws Devanagari glyphs at Latin code points ("d" is क, "f" is the ि
+ * matra), so text is re-encoded; the ि matra goes before its consonant
+ * cluster and a reph (र् before a cluster) after the syllable, as "Z".
  */
 
 const C = "[क-हक़-य़]़?"
@@ -58,7 +50,7 @@ function consonant(ch: string, nukta: boolean, half: boolean): string {
 
 /** Re-encodes Unicode Devanagari for Kruti Dev 010. Characters it has no glyph for pass through. */
 function unicodeToKruti(text: string): string {
-  // Precomposed nukta letters (क़ U+0958 …) as base + nukta.
+  // NFD splits precomposed nukta letters (क़ U+0958 …) into base + nukta.
   let s = text.normalize("NFD")
   s = s.replace(REPH, "$1$2Z")
   s = s.replace(I_MATRA, "\u0001$1")
@@ -101,14 +93,13 @@ const KRUTI_PUNCT = /[ऀ-ॿ\s,.?()/;‘’“”-]/
 
 export interface Run {
   text: string
-  /** True for Kruti Dev text, false for a run in the document's Latin font. */
   kruti: boolean
 }
 
 /**
- * Splits Unicode Hindi into Kruti Dev runs (already re-encoded) and runs to
- * keep in a Latin font: words with no Devanagari, and characters Kruti Dev
- * has no glyph for (digits, dashes, ⌘ …). Spaces join the run before them.
+ * Kruti Dev runs (re-encoded) and runs for a Latin font: words with no
+ * Devanagari, and characters Kruti Dev has no glyph for (digits, dashes).
+ * Spaces join the run before them.
  */
 export function splitKrutiRuns(text: string): Run[] {
   const runs: Run[] = []

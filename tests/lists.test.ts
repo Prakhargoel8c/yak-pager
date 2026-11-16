@@ -23,7 +23,7 @@ const ol = (...items: PMNode[]) => orderedList.create(null, items)
 const olFrom = (start: number, ...items: PMNode[]) => orderedList.create({ start }, items)
 
 
-/** Where `text` starts in `d` (its paragraph's position). */
+/** The position of the paragraph holding `text`. */
 function at(d: PMNode, text: string): number {
   let found = -1
   d.descendants((n, pos) => {
@@ -87,11 +87,11 @@ describe("list units", () => {
     // "one" opens item 1 and the list: its unit starts at the list.
     expect(u.one.pos).toBe(listPos)
     expect(u.one.at).toBe(at(nested, "one"))
-    // "one.a" opens the nested bullet list (the 2nd block of item 1): its unit starts at that list.
+    // "one.a" opens the nested bullet list: its unit starts at that list.
     expect(nested.nodeAt(u["one.a"].pos)!.type).toBe(bulletList)
     expect(nested.nodeAt(u["one.a.i"].pos)!.type).toBe(orderedList)
     expect(nested.nodeAt(u.deep.pos)!.type).toBe(bulletList)
-    // A second paragraph in an item, and a later item, start where they are / at their item.
+    // A second paragraph in an item starts where it is; a later item's first starts at the item.
     expect(u["deep 2"].pos).toBe(u["deep 2"].at)
     expect(nested.nodeAt(u["one.b"].pos)!.type).toBe(listItem)
     expect(nested.nodeAt(u.two.pos)!.type).toBe(listItem)

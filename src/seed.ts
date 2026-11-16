@@ -1,8 +1,7 @@
 /**
- * Seed document — long enough to span 4+ pages, with headings, a horizontal
- * rule, mixed marks (strong / em / fontSize), one justified paragraph, and
- * one explicit pageBreak node so the forced-break path is visible on first
- * load. The words come from src/seed-text/<lang>.json.
+ * Seed documents, 4+ pages each: headings, a rule, marks, a justified
+ * paragraph and an explicit page break. The words come from
+ * src/seed-text/<lang>.json, every language in the same shape.
  */
 import { schema } from "./schema"
 import type { Node, Mark } from "prosemirror-model"
@@ -20,12 +19,8 @@ const m = {
   size: (px: number) => schema.marks.fontSize.create({ size: px }),
 }
 
-/**
- * How text() writes the seed's words: the document's base font, and whether
- * Hindi is re-encoded for Kruti Dev. Re-encoded text is split into Kruti
- * Dev runs and Latin runs (Georgia); a run whose font isn't the base font
- * gets a fontFamily mark.
- */
+// How text() writes words: re-encoded Hindi is split into Kruti Dev and Latin
+// runs, and a run not in the base font gets a fontFamily mark.
 let base: FontKey = "georgia"
 let kruti = false
 
@@ -50,13 +45,7 @@ const item = (...blocks: Node[]) => schema.nodes.listItem.create(null, blocks)
 const ul = (items: Node[]) => schema.nodes.bulletList.create(null, items)
 const ol = (items: Node[], start = 1) => schema.nodes.orderedList.create({ start }, items)
 
-/**
- * The seed's words, one file per language. Every language has the same
- * shape, so the document's structure (headings, marks, the justified
- * paragraph, the rule and the explicit break) is the same in all of them.
- * Marked runs are fixed slots: intro = [text, strong, text, em, text],
- * tryIt = [text, strong, text, strong, text], fontSize = [text, 20px, text].
- */
+/** Marked runs are fixed slots: intro = [text, strong, text, em, text], tryIt = [text, strong, text, strong, text], fontSize = [text, 20px, text]. */
 export interface SeedText {
   title: string
   intro: [string, string, string, string, string]
@@ -67,11 +56,7 @@ export interface SeedText {
   afterBreak: { title: string; paras: string[]; subtitle: string; subParas: string[] }
 }
 
-/**
- * `font` is the document's base font; `kruti` re-encodes the Hindi for Kruti
- * Dev. "mixed" interleaves the English seed with the Hindi one in Kruti Dev
- * on a Georgia document.
- */
+/** `kruti` re-encodes the Hindi for Kruti Dev. */
 export const LANGUAGES: Record<string, { label: string; text: SeedText; font: FontKey; kruti?: boolean }> = {
   en: { label: "English", text: en as SeedText, font: "georgia" },
   hi: { label: "हिन्दी (Kruti Dev)", text: hi as SeedText, font: "kruti", kruti: true },
@@ -118,7 +103,6 @@ export function buildSeedDoc(lang: Language = "en"): Node {
     for (const p of section.paras) children.push(para(p))
   }
 
-  // An explicit, authorial page break: this one IS a document node.
   children.push(
     schema.nodes.pageBreak.create(),
     heading(2, t.afterBreak.title),
@@ -130,11 +114,7 @@ export function buildSeedDoc(lang: Language = "en"): Node {
   return schema.nodes.doc.create({ font }, children)
 }
 
-/**
- * English and Hindi in Kruti Dev in one Georgia document: each English
- * paragraph is followed by its Hindi counterpart, headings carry both, and
- * the Hindi keeps its own Latin words in Georgia, so lines mix the fonts.
- */
+/** Each English paragraph followed by its Hindi counterpart in Kruti Dev; headings carry both, so lines mix the fonts. */
 function buildMixedDoc(): Node {
   const e = en as SeedText
   const h = hi as SeedText
@@ -159,11 +139,7 @@ function buildMixedDoc(): Node {
   return schema.nodes.doc.create({ font: "georgia" }, children)
 }
 
-/**
- * The English seed with tables: a small one with a header row, a long one
- * whose rows break across pages (multi-line and uneven cells, a Kruti Dev
- * cell, a Unicode Hindi cell, a colspan), and one with resized columns.
- */
+/** A small table, a long one that breaks across pages (uneven cells, Kruti Dev, Unicode Hindi, a colspan), and one with resized columns. */
 function buildTableDoc(): Node {
   const e = en as SeedText
   const h = hi as SeedText
@@ -216,11 +192,7 @@ function buildTableDoc(): Node {
   return schema.nodes.doc.create({ font: "georgia" }, children)
 }
 
-/**
- * The English seed's words as long nested lists: ordered and bullet lists
- * four levels deep, bullets inside numbers and numbers inside bullets,
- * items of several paragraphs, an empty item, and a list starting at 5.
- */
+/** Lists four levels deep, alternating kinds, items of several paragraphs, an empty item, and a list starting at 5. */
 function buildListDoc(): Node {
   const e = en as SeedText
   const paras = [...e.sections.flatMap((s) => s.paras), ...e.afterBreak.paras, ...e.afterBreak.subParas]

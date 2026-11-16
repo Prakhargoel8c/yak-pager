@@ -1,9 +1,8 @@
 /**
- * TABLES — column widths and the table's DOM. Widths are whole pixels so
- * Pretext breaks a cell's lines at the same width the browser does: a
- * resized column keeps its colwidth, the others share what is left of the
- * column, rounded down, the last one taking the remainder. The CSS computes
- * the same numbers from --content-w, so a margin change needs no JS.
+ * Column widths and the table's DOM. Widths are whole pixels so Pretext
+ * breaks a cell's lines where the browser does: a resized column keeps its
+ * colwidth, the others share the rest rounded down, the last taking the
+ * remainder. The CSS computes the same numbers from --content-w.
  */
 import type { Node as PMNode } from "prosemirror-model"
 import type { DOMOutputSpec } from "prosemirror-model"
@@ -12,7 +11,7 @@ import { TextSelection } from "prosemirror-state"
 import type { NodeView, ViewMutationRecord } from "prosemirror-view"
 import { TABLE } from "./typography"
 
-/** Per column, from the first row: its colwidth in px, or null for a column that shares the rest. */
+/** From the first row: each column's colwidth, or null for one that shares the rest. */
 export function tableColumns(table: PMNode): (number | null)[] {
   const cols: (number | null)[] = []
   table.firstChild?.forEach((cell) => {
@@ -31,7 +30,6 @@ export function columnWidths(cols: (number | null)[], contentW: number): number[
   return cols.map((c) => c ?? (++seen === free ? last : share))
 }
 
-/** The same widths as CSS over --content-w, plus the table's width. */
 function columnCSS(cols: (number | null)[]): { table: string; cols: string[] } {
   const set = cols.reduce<number>((s, c) => s + (c ?? 0), 0)
   const free = cols.filter((c) => c == null).length
@@ -45,7 +43,6 @@ function columnCSS(cols: (number | null)[]): { table: string; cols: string[] } {
   }
 }
 
-/** The table's DOM for serializing (print): wrapper, table with widths, colgroup, tbody. */
 export function tableToDOM(node: PMNode): DOMOutputSpec {
   const css = columnCSS(tableColumns(node))
   return [
@@ -55,7 +52,7 @@ export function tableToDOM(node: PMNode): DOMOutputSpec {
   ]
 }
 
-/** The editor's table: the same DOM, with the colgroup kept in step with the cells' colwidths. */
+/** The same DOM, its colgroup kept in step with the cells' colwidths. */
 export class TableView implements NodeView {
   dom: HTMLElement
   contentDOM: HTMLElement
@@ -94,7 +91,7 @@ export class TableView implements NodeView {
   }
 }
 
-/** Inserts a rows × cols table with a header row, and puts the cursor in its first cell. */
+/** A rows × cols table with a header row, the cursor in its first cell. */
 export function insertTable(rows = 3, cols = 3): Command {
   return (state, dispatch) => {
     const { table, tableRow, tableCell, tableHeader, paragraph } = state.schema.nodes

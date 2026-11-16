@@ -11,7 +11,7 @@ const geometry = pageGeometry(DEFAULT_MARGINS)
 const t = (s: string) => schema.text(s)
 const p = (s: string) => schema.nodes.paragraph.create(null, t(s))
 
-/** A measurer that answers from a table of heights by text, declining anything else. */
+/** Answers from a table of heights by text, declining anything else. */
 function fake(heights: Record<string, MeasuredBlock>) {
   const calls: string[] = []
   let invalidated = 0
@@ -66,9 +66,7 @@ describe("runPass", () => {
   })
 
   it("reports pages with their start, fill and opening break", () => {
-    // 800 + 200 overflows: the second paragraph opens page 2 at a block
-    // boundary. The third splits at its one line boundary: page 3 opens
-    // inside it, and the carried part is measured by the solver's rule.
+    // 800 + 200 overflows, so the second paragraph opens page 2; the third splits, so page 3 opens inside it.
     const doc = schema.nodes.doc.create(null, [p("a"), p("b"), p("long paragraph")])
     const cache: MeasureCache = new WeakMap()
     const { m } = fake({

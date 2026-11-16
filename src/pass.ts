@@ -1,14 +1,8 @@
 /**
- * The PAGINATION PASS: document, geometry, measurers, dirty range and cache
- * in; layout out. It touches no DOM itself (the measurers do) and dispatches
- * nothing, so it runs in Node with a fake measurer (tests/pass.test.ts).
- *
- * MEASURE  walk the units, read heights through the measurers (the first
- *          that does not decline), cached by Node identity: PM nodes are
- *          immutable values, so an untouched block keeps its Node across a
- *          transaction and its measurement with it. Only units in the dirty
- *          range, or everything on a full pass, are re-measured.
- * SOLVE    pure — see solver.ts.
+ * The pagination pass: measure, then solve. Touches no DOM itself (the
+ * measurers do) and dispatches nothing, so it runs in Node with a fake
+ * measurer. Measurements are cached by Node identity: PM nodes are immutable
+ * values, so an untouched block keeps its Node across a transaction.
  */
 import type { Node as PMNode } from "prosemirror-model"
 import type { Layout, PageGeometry } from "./layout"
@@ -25,6 +19,7 @@ export type MeasureCache = WeakMap<PMNode, MeasuredBlock & { inset: number }>
 export interface PassInput {
   doc: PMNode
   geometry: PageGeometry
+  /** Asked in order; the first that does not decline answers. */
   measurers: Measurer[]
   dirty: { from: number; to: number } | null
   /** Re-measure everything and drop what the measurers cached. */
@@ -63,7 +58,6 @@ export function runPass({ doc, geometry, measurers, dirty, full, cache }: PassIn
       cache.set(u.node, m)
       measured++
     }
-    // Split candidates are cached relative to the unit's content start.
     const splits = m.splitCandidates?.map((s) => ({ pos: u.contentStart + s.pos, height: s.height }))
     blocks.push({ pos: u.pos, height: m.height + u.extra, splits })
     if (u.kind === "forced") forced.push(u.pos)

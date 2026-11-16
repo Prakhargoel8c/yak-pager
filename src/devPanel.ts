@@ -1,22 +1,7 @@
 /**
- * Dev panel — the empirical half of the exercise.
- *
- * Shows: page count, break positions, last reflow duration, how many blocks
- * were re-measured (cache hits = total - measured), and the DOM operation
- * log captured by the MutationObserver during the reflow. "Re-run pass"
- * proves idempotence: it forces a full re-measure of a stable layout, and
- * the log should come back empty. "Dump doc JSON" proves rule 1: the
- * serialized document contains no page nodes, ever.
- *
- * The second card holds the block visualizer: a live tree of the document
- * (sync() runs after every transaction). Each row shows the node type with a
- * block/inline/text badge, so the three node kinds are visible while editing.
- * The rows on the path from the doc root down to the cursor are highlighted,
- * and clicking a row selects that node in the editor.
- *
- * Both cards are collapsible and behave like an accordion: opening one closes
- * the other, so at most one panel body is visible at a time. The head of each
- * card (title plus arrow button) is permanent DOM; only the body re-renders.
+ * Dev panel: the last pass's numbers and DOM operation log ("Re-run pass"
+ * on a stable layout should log nothing), and a live document tree whose
+ * rows select their node. The two cards are an accordion.
  */
 import { API_KIND } from "./apiMeter"
 import type { EditorView } from "prosemirror-view"
@@ -28,7 +13,6 @@ import { requestFullRecompute } from "./paginationPlugin"
 export interface DevPanel {
   report(r: ReflowReport): void
   attach(view: EditorView): void
-  /** Re-render the block visualizer from the current doc. */
   sync(): void
 }
 
@@ -41,7 +25,6 @@ const OP_STYLES: Record<string, string> = {
   other: "op-other",
 }
 
-/** Calls in a pass that can force layout or style, measure and apply together. */
 function layoutReads(r: ReflowReport): number {
   let n = 0
   for (const calls of [r.apiCalls.measure, r.apiCalls.apply]) {
@@ -87,8 +70,6 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
       parts.push(
         `<div class="phases"><span class="k">phases</span>measure ${ms(r.phaseMs.measure)} · solve ${ms(r.phaseMs.solve)} · apply ${ms(r.phaseMs.apply)} ms</div>`
       )
-      // Costly browser calls the pass made: red forces layout or style,
-      // amber shapes or segments text.
       const apiChips = (calls: Record<string, number>) => {
         const entries = Object.entries(calls).sort((a, b) => b[1] - a[1])
         if (entries.length === 0) return `<span class="api-chip api-none">none</span>`
@@ -147,8 +128,6 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
   buttons.append(rerun, dump)
   reflowBody.append(buttons)
 
-  /* ---------- block visualizer ---------- */
-
   const EXCERPT_LEN = 10
 
   const esc = (s: string) =>
@@ -200,7 +179,6 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
   const renderTree = () => {
     if (!view) return
     const doc = view.state.doc
-    // Positions of every node between the doc root and the cursor.
     const path = new Set<number>()
     const $from = view.state.selection.$from
     for (let d = $from.depth; d >= 1; d--) path.add($from.before(d))
@@ -222,7 +200,6 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
   treeEl.append(treeHead, treeBody)
   mount.append(treeEl)
 
-  // One listener on the card survives innerHTML re-renders.
   treeEl.addEventListener("click", (e) => {
     if (!view) return
     const rowEl = (e.target as HTMLElement).closest<HTMLElement>("[data-pos]")
@@ -248,8 +225,6 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
     console.log(JSON.stringify(view.state.doc.toJSON(), null, 2))
   }
 
-  /* ---------- accordion: at most one panel body visible ---------- */
-
   let open: "reflow" | "tree" | null = "reflow"
 
   const applyOpen = () => {
@@ -269,8 +244,6 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
     open = open === name ? null : name
     applyOpen()
   }
-  // The arrow button has no handler of its own — its click bubbles to the
-  // head, so the whole head is one big toggle target.
   reflowHead.onclick = () => toggle("reflow")
   treeHead.onclick = () => toggle("tree")
 

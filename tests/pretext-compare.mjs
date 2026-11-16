@@ -1,18 +1,9 @@
 /**
- * Pretext vs DOM (run: npm run build && npm run pretext-compare) — measures
- * every paragraph and heading both ways in a real browser and fails on any
- * block whose height (to 0.5px) or split candidates differ.
- *
- * Runs on the seed document, then again after appending blocks that stress
- * the line model: long unbreakable words, a URL, hard breaks (including a
- * trailing one), an empty paragraph, mixed font sizes on one line, marks in
- * headings, and justified text. Then once more with Indic and mixed-script
- * text (tests/indic-samples.json): every sample as a paragraph, plus Indic
- * headings, marks, font sizes and hard breaks. Last, the Hindi seed in
- * Kruti Dev 010 (?lang=hi): legacy-encoded text in a web font, with Latin
- * runs in Georgia on the same lines.
- *
- * Requires google-chrome on PATH (or CHROME=/path/to/chrome) and a build.
+ * Pretext vs DOM (npm run build && npm run pretext-compare): measures every
+ * block both ways in a real browser, on the seeds, stress blocks, Indic
+ * text, Kruti Dev, margins, tables and lists, and fails on any height (to
+ * 0.5px) or split candidate that differs. Requires google-chrome on PATH
+ * (or CHROME=/path/to/chrome).
  */
 import { spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
@@ -34,16 +25,10 @@ try {
   await page.goto("http://localhost:4180/", { waitUntil: "networkidle0" })
   await sleep(1200)
 
-  // Fails on a height off by 0.5px or more, a DOM split candidate Pretext
-  // doesn't have, or a split top where Pretext is wrong. Split tops are
-  // judged against the browser itself: the paragraph is cloned, cut at the
-  // split, and its height is the carried line's line-box top. The DOM path
-  // is not the reference there, as it assumes every line has the first
-  // line's half-leading, which is off when a line holds a larger font or
-  // a second font (Latin runs in a Kruti Dev document). Expected, and only
-  // listed: extra Pretext candidates, lines that start inside a
-  // whitespace-free token (after a hyphen, or a long word or URL broken
-  // mid-way), which the DOM path's /\S+/ word grouping never sees.
+  // Split tops are judged against the browser itself (the paragraph cloned
+  // and cut at the split), since the DOM path's half-leading assumption is
+  // off on lines with a larger or second font. Extra Pretext candidates
+  // inside a whitespace-free token are expected and only listed.
   const report = async (label) => {
     const { compared, diffs } = await page.evaluate(() => {
       const { view } = window.__pager
@@ -51,7 +36,6 @@ try {
       const host = document.createElement("div")
       host.className = "ProseMirror"
       host.style.cssText = `position:absolute;visibility:hidden;top:0;left:0;box-sizing:border-box;width:${view.dom.getBoundingClientRect().width}px`
-      // The document's font is an inline style on the editor (its doc attr).
       host.style.fontFamily = getComputedStyle(view.dom).fontFamily
       document.getElementById("paper").append(host)
       for (const d of result.diffs) {
@@ -61,7 +45,6 @@ try {
           if (!pretext.has(s.pos) || Math.abs(pretext.get(s.pos) - s.height) < 0.5) continue
           const original = view.nodeDOM(d.offset)
           const clone = original.cloneNode(true)
-          // A paragraph in a list is laid out at its level's width.
           clone.style.width = `${original.getBoundingClientRect().width}px`
           clone.querySelectorAll(".page-gap").forEach((g) => g.remove())
           clone.style.marginTop = ""
@@ -179,8 +162,7 @@ try {
     console.log(`  ${ok ? "✓" : "✗"} ${label}${detail ? `  — ${detail}` : ""}`)
     if (!ok) failures++
   }
-  // Web fonts load when text first uses them; wait for them, and for the
-  // full re-measure their loading triggers.
+  // Web fonts load when text first uses them; wait for the full re-measure that triggers.
   const open = async (query) => {
     await page.goto(`http://localhost:4180/${query}`, { waitUntil: "networkidle0" })
     await page.evaluate(() => Promise.all([document.fonts.load('16px "Kruti Dev"'), document.fonts.load("16px Gayathri", "മ")]))
@@ -188,7 +170,6 @@ try {
   }
   const editorFont = () => page.evaluate(() => getComputedStyle(window.__pager.view.dom).fontFamily)
   const fontSelect = () => page.evaluate(() => document.querySelector(".font-select").value)
-  /** Puts the cursor (or a selection to `to`) at document positions, then lets the toolbar sync. */
   const select = (from, to = from) =>
     page.evaluate(([from, to]) => {
       const { view } = window.__pager
@@ -196,7 +177,6 @@ try {
       view.dispatch(view.state.tr.setSelection(sel))
       view.focus()
     }, [from, to])
-  /** The position at the end of the nth top-level paragraph. */
   const endOfParagraph = (nth) =>
     page.evaluate((nth) => {
       let k = 0, at = null
@@ -205,7 +185,7 @@ try {
       })
       return at
     }, nth)
-  /** Start and end of the first text run with (or without) a fontFamily mark, at least 4 characters. */
+  /** The first text run with (or without) a fontFamily mark. */
   const run = (marked) =>
     page.evaluate((marked) => {
       let at = null
@@ -216,10 +196,8 @@ try {
     }, marked)
 
   console.log("— switching to a web font from the language menu")
-  // First of the Kruti Dev stages, so the font is not in the browser yet.
-  // The first pass after the switch runs before Kruti Dev has loaded, so it
-  // measures in the fallback font; the full pass the font load triggers must
-  // drop those widths and line boxes. A direct ?lang=hi load is the reference.
+  // The first pass after the switch measures in the fallback font; the full
+  // pass the font load triggers must drop those widths and line boxes.
 
   await page.goto("http://localhost:4180/", { waitUntil: "networkidle0" })
   await sleep(800)
@@ -244,10 +222,6 @@ try {
   await report("Kruti Dev seed")
 
   console.log("— print preview of the Kruti Dev document")
-  // Approach C renders the document's pages in an iframe: it must use the
-  // document's font (and Georgia for the Latin runs), hold exactly the
-  // layout's pages with the text between the editor's breaks, and keep
-  // every line inside its sheet's writable area.
   await page.$eval(".preview-c", (el) => el.click())
   await page.waitForSelector("#print-modal:not(.pm-loading)")
   const print = await page.evaluate(async () => {
@@ -310,9 +284,7 @@ try {
   check((await fontSelect()) === "mixed", "a selection over both reads Mixed fonts", await fontSelect())
 
   console.log("— typing in Kruti Dev")
-  // A Kruti Dev user types ASCII on a Kruti keyboard layout ("fd" is कि),
-  // plus a few non-ASCII keys (Ã, ¡, ±). Type a seed paragraph's own text,
-  // keystroke by keystroke and fast, into a new paragraph mid-document.
+  // A Kruti Dev user types ASCII on a Kruti keyboard layout, plus a few non-ASCII keys (Ã, ¡, ±).
   const typed = await page.evaluate(() => {
     let source = ""
     window.__pager.view.state.doc.descendants((n) => {
@@ -333,8 +305,6 @@ try {
     return `${getComputedStyle(first.parentElement).fontFamily} | ${p.textContent.length}/${text.length} chars`
   }, typed)
   check(/^"?Kruti Dev"?,/.test(typedFamily ?? ""), "the typed paragraph renders in Kruti Dev", typedFamily ?? "paragraph not found")
-  // Typing on from an English run stays English (the mark is inclusive, as
-  // in a word processor); choosing Kruti Dev in the dropdown switches.
   const latinNow = await run(true)
   await select(latinNow[1])
   await page.keyboard.type("on ")
@@ -365,7 +335,6 @@ try {
   })
   check(krutiInMixed > 20, "Hindi runs carry the Kruti Dev mark", `${krutiInMixed} runs`)
   await report("mixed English + Kruti Dev")
-  // Choose Kruti Dev on an empty paragraph in the English document and type.
   await select(await endOfParagraph(5))
   await page.keyboard.press("Enter")
   await page.select(".font-select", "kruti")
@@ -391,11 +360,6 @@ try {
   await report("Malayalam in Gayathri")
 
   console.log("— Page margins")
-  // For each preset and a lopsided custom set: the geometry follows the
-  // margins, the editor's column is the geometry's, every gap widget is
-  // band + push tall and lands the next page at its layout start, the
-  // sheets are painted there, and no line of text sits outside a page's
-  // writable area. Then undo returns to 1in margins.
   const MARGINS = [
     ["narrow", { top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 }],
     ["moderate", { top: 1, right: 0.75, bottom: 1, left: 0.75 }],
@@ -466,11 +430,6 @@ try {
     check(back.margins.top === 1 && back.margins.left === 1 && back.select === "normal" && back.padding === "96px", `${lang || "English"} undo restores 1in margins`, JSON.stringify(back))
   }
 
-  // Tables paginate row by row. Every row's Pretext height (each cell's
-  // blocks at its column's width) must match its <tr>, every page must
-  // open at a row or block boundary with the row whole on one page, and
-  // the gap between two rows must be a row of the table landing the next
-  // row exactly on the next page's content start.
   const tableLayout = async (label) => {
     const r = await page.evaluate(() => {
       const { view, layout, geometry } = window.__pager
@@ -509,8 +468,7 @@ try {
   await report("tables")
   await tableLayout("table document")
 
-  // Grow the last row on the first page that ends inside a table until it
-  // no longer fits: the row moves whole to the next page.
+  // Grow the last row on a page until it no longer fits: it moves whole.
   const lastRowBefore = await page.evaluate(() => {
     const { view, layout } = window.__pager
     const k = layout.breaks.findIndex((b) => view.state.doc.resolve(b.pos).parent.type.name === "table")
@@ -603,10 +561,6 @@ try {
   await sleep(400)
   await tableLayout("Kruti Dev table at a page edge")
 
-  // Lists: every paragraph of every item is measured at its level's width
-  // (the column less LIST.indent per level) and splits at line boundaries,
-  // so the report above must find 0 disagreements at every level; every gap
-  // must land the next page's first line, and no line may leave its page.
   const listLayout = async (label) => {
     const r = await page.evaluate(() => {
       const { view, layout, geometry } = window.__pager
@@ -674,7 +628,6 @@ try {
   await page.select(".margins-select", "normal")
   await sleep(400)
 
-  // Type at the end of the deepest paragraph that straddles a page edge.
   const deepSplit = await page.evaluate(() => {
     const { view, layout } = window.__pager
     let best = null
@@ -693,7 +646,6 @@ try {
   const typedRerun = await rerun()
   check(typedRerun.same, "after typing into a nested item, the breaks match a full re-run", JSON.stringify(typedRerun))
 
-  // Tab sinks an item a level, Shift-Tab lifts it back.
   const sinkable = await page.evaluate(() => {
     let at = null
     window.__pager.view.state.doc.descendants((n, pos, parent, index) => {
@@ -739,14 +691,12 @@ try {
       for (; el && el !== root; el = el.parentElement) if (el.tagName === "UL" || el.tagName === "OL") n++
       return n
     }
-    // Item numbers in document order: on screen every numbered item; in
-    // print every item but the continuation of one cut in two.
+    // In print, the continuation of an item cut in two carries no number.
     const number = (li) => li.parentElement.start + [...li.parentElement.children].filter((c) => c.tagName === "LI").indexOf(li)
     const screenNumbers = [...view.dom.querySelectorAll("ol > li")].map(number)
     const printNumbers = [...frame.querySelectorAll(".sheet ol > li:not(.li-continued)")].map(number)
     const wrongNumber = screenNumbers.flatMap((n, i) => (printNumbers[i] === n ? [] : [`item ${i}: printed ${printNumbers[i]}, on screen ${n}`]))
-    // Paragraph nesting levels in document order; a paragraph split across
-    // pages prints once per page.
+    // A paragraph split across pages prints once per page.
     const screenDepths = [...view.dom.querySelectorAll("p")].flatMap((p) => Array(1 + p.querySelectorAll(".page-gap").length).fill(depth(p, view.dom)))
     const printDepths = [...frame.querySelectorAll(".sheet p")].map((p) => depth(p, p.closest(".sheet")))
     const wrongDepth = screenDepths.flatMap((d, i) => (printDepths[i] === d ? [] : [`paragraph ${i}: printed ${printDepths[i]} deep, on screen ${d}`]))

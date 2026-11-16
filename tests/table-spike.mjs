@@ -1,12 +1,8 @@
 /**
- * Table spike (run: npm run build && node tests/table-spike.mjs) — HTML
- * <table> or CSS grid for paginated tables? Clones every table of the
- * ?lang=table document into hidden copies, renders each copy one way, and
- * compares every row's height with the Pretext prediction the pass uses.
- * Then inserts a gap before a row in each rendering and checks the row
- * after it lands on the gap's bottom edge, and that nothing above moved.
- * Last, drives prosemirror-tables in the live editor (cell selection by
- * drag, column resize) with the tables rendered as a grid.
+ * <table> or CSS grid for paginated tables? (npm run build && npm run
+ * table-spike.) Renders every table each way, compares row heights with the
+ * Pretext prediction, inserts a gap before a row, and drives
+ * prosemirror-tables as a grid. Results in design_decisions.md section 6.
  */
 import { spawn } from "node:child_process"
 import puppeteer from "puppeteer-core"

@@ -1,8 +1,4 @@
-/**
- * LISTS — editing commands over prosemirror-schema-list: Enter splits an
- * item, Tab and Shift-Tab indent and outdent it (or move between table
- * cells), "- " and "1. " start a list, and the toolbar toggles one.
- */
+/** List editing over prosemirror-schema-list; Tab moves between table cells first. */
 import { chainCommands } from "prosemirror-commands"
 import { InputRule, inputRules, wrappingInputRule } from "prosemirror-inputrules"
 import { keymap } from "prosemirror-keymap"
@@ -35,10 +31,7 @@ export const listInputRules = (): Plugin =>
     ] as InputRule[],
   })
 
-/**
- * The toolbar's list buttons: wrap the selection in a list of `type`; in a
- * list of that type already, lift it out; in the other kind, switch kinds.
- */
+/** Wrap in a list of `type`; in one already, lift out; in the other kind, switch. */
 export function toggleList(type: NodeType): Command {
   return (state, dispatch) => {
     const { $from } = state.selection

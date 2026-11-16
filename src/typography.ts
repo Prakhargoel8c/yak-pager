@@ -1,13 +1,9 @@
-/**
- * TYPOGRAPHY — the one table of block styles. The editor's CSS, Pretext's
- * block model and the print document's CSS are all generated from it, so
- * a block is the same height in all three.
- */
+/** The one table of block styles: the editor's CSS, Pretext's model and the print CSS are all generated from it. */
 import type { Node as PMNode } from "prosemirror-model"
 
 export interface BlockStyle {
   size: number
-  /** Unitless CSS line-height: a run in another font size gets size × this. */
+  /** Unitless: a run in another font size gets size × this. */
   lineHeight: number
   weight: number
   padTop: number
@@ -27,19 +23,16 @@ export function blockStyle(node: PMNode): BlockStyle | null {
   return null
 }
 
-/** Lists add no height of their own: an item is its blocks, indented a whole number of px per level. */
+/** Whole px per level, so Pretext breaks lines where the browser does. Lists add no height of their own. */
 export const LIST = { indent: 24 }
 
 /**
- * Table geometry. Borders are separate (no collapsing): every cell draws its
- * right and bottom border, first-column cells also their left, and the
- * table its top. A row's height is then max(cell content) + 2 × padY +
- * border, whatever its place in the table; the table's top border and the
- * space below it belong to its first and last row.
+ * Borders are separate, never collapsed: every cell draws its right and
+ * bottom border, first-column cells their left, the table its top. A row's
+ * height is then independent of its place in the table.
  */
 export const TABLE = { padX: 8, padY: 6, border: 1, tail: 10, minCol: 25, line: "#c3c9d2", head: "#f3f5f8" }
 
-/** A block inside a table cell: no block spacing, and bold in a header cell. */
 export function cellBlockStyle(node: PMNode, header: boolean): BlockStyle | null {
   const s = blockStyle(node)
   if (!s) return null
@@ -48,14 +41,13 @@ export function cellBlockStyle(node: PMNode, header: boolean): BlockStyle | null
 
 export const INK = "#1f2328"
 
-/** How the column flows text; the edge-line probe lays text out with the same settings. */
+/** Shared with the edge-line probe in pretextMeasure.ts. */
 export const TEXT_FLOW =
   "word-wrap: break-word; white-space: pre-wrap; -webkit-font-variant-ligatures: none; font-variant-ligatures: none"
 
 const block = (s: BlockStyle) =>
   `font-size: ${s.size}px; line-height: ${s.lineHeight}; padding: ${s.padTop}px 0 ${s.padBottom}px; font-weight: ${s.weight};`
 
-/** The column's CSS under `scope`, in `family` (the document's font). */
 export function typographyCSS(scope: string, family: string): string {
   return `
 ${scope} { font-family: ${family}; font-size: ${PARAGRAPH.size}px; line-height: ${PARAGRAPH.lineHeight}; color: ${INK}; ${TEXT_FLOW}; }

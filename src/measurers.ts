@@ -1,12 +1,8 @@
 /**
- * MEASURER adapters. A measurer reports a unit's height and split
- * candidates, or declines (null) when it cannot model the unit; the pass
- * then asks the next adapter. `invalidate` forgets anything measured in a
- * font that has since loaded.
- *
- *   domMeasurer      reads the rendered block (measure.ts); never declines
- *   pretextMeasurer  computes paragraphs and headings from the document
- *                    (pretextMeasure.ts); declines everything else
+ * Measurer adapters: a unit's height and split candidates, or null to
+ * decline. pretextMeasurer computes from the document (pretextMeasure.ts)
+ * and declines what it can't model; domMeasurer reads the rendered block
+ * (measure.ts) and never declines.
  */
 import type { EditorView } from "prosemirror-view"
 import { clearCache } from "@chenglou/pretext"
@@ -19,6 +15,7 @@ import type { SplitCandidate } from "./solver"
 
 export interface Measurer {
   measure(unit: Unit): MeasuredBlock | null
+  /** Forget anything measured in a font that has since loaded. */
   invalidate(): void
 }
 
@@ -55,11 +52,7 @@ const sameSplits = (a: SplitCandidate[] | null, b: SplitCandidate[] | null) =>
   (a ?? []).length === (b ?? []).length &&
   (a ?? []).every((s, i) => s.pos === b![i].pos && Math.abs(s.height - b![i].height) < 0.5)
 
-/**
- * Measure every unit with both adapters and return where they disagree: a
- * height off by half a pixel or more, or different split candidates. For
- * checking the Pretext path against the DOM (tests/pretext-compare.mjs).
- */
+/** Where the two adapters disagree (a height off by 0.5px or more, or different split candidates), for tests/pretext-compare.mjs. */
 export function compareWithDom(view: EditorView): { compared: number; diffs: MeasureDiff[]; rows: { pos: number; dom: number; pretext: number }[] } {
   const pretext = pretextMeasurer(view)
   const dom = domMeasurer(view)

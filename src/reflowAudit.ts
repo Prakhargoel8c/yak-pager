@@ -1,10 +1,7 @@
 /**
- * REFLOW AUDIT — the empirical rule-3 log shown in the dev panel. A
- * MutationObserver brackets the apply step of every pass and records each
- * DOM operation the reflow performed; classify() reduces the raw records to
- * the logical operations (a widget moved, a push changed, a widget created)
- * and counts anything else as "other". Reporting only: pagination works the
- * same without it.
+ * A MutationObserver brackets the apply step of every pass; classify()
+ * reduces its records to logical operations (a widget moved, a push changed,
+ * a widget created) and counts anything else as "other". Reporting only.
  */
 import type { ApiCounts } from "./apiMeter"
 
@@ -20,9 +17,7 @@ export interface ReflowReport {
   durationMs: number
   measuredCount: number
   totalBlocks: number
-  /** Time spent measuring, solving, and applying the result. */
   phaseMs: { measure: number; solve: number; apply: number }
-  /** Costly browser API calls made while measuring and while applying (apiMeter.ts). */
   apiCalls: { measure: ApiCounts; apply: ApiCounts }
   fullRecompute: boolean
   ops: Array<{ kind: OpKind; text: string }>
@@ -30,9 +25,7 @@ export interface ReflowReport {
 }
 
 export interface AuditEnv {
-  /** The .paper-stack: attribute writes on it are scaffold, not content. */
   stack: Node
-  /** Widgets created during this pass, as opposed to moved. */
   created: Set<Node>
 }
 
@@ -43,16 +36,13 @@ export function classify(records: MutationRecord[], env: AuditEnv): { ops: Reflo
   const ops: ReflowReport["ops"] = []
   const counts: ReflowOps = { setAttribute: 0, removeAttribute: 0, insertBefore: 0, create: 0, remove: 0, other: 0 }
 
-  // Widgets first: a move can surface as one record (node in both added and
-  // removed) or as separate remove+add records, so reduce to a net
-  // disposition per element before classifying.
+  // A move can surface as one record or as separate remove+add records.
   const net = new Map<HTMLElement, { added: boolean; removed: boolean }>()
   const otherChildList: MutationRecord[] = []
   const textSplits: MutationRecord[] = []
   for (const r of records) {
     if (r.type !== "childList") continue
-    // Moving a widget that sits between two words re-splits the paragraph's
-    // text nodes around the new position: part of the move, not churn.
+    // Moving an inline widget re-splits the text nodes around it: part of the move.
     const nodes = [...r.addedNodes, ...r.removedNodes]
     if (nodes.length > 0 && nodes.every((n) => n.nodeType === 3)) {
       textSplits.push(r)
@@ -80,11 +70,8 @@ export function classify(records: MutationRecord[], env: AuditEnv): { ops: Reflo
     ops.push({ kind: "insertBefore", text: `re-split #text in ${r.target.nodeName.toLowerCase()} (inline widget moved)` })
   }
 
-  // Attribute records: prosemirror-view patches a style decoration by
-  // removing the old properties and then appending the new value, so one
-  // logical change can appear as two records. Collapse per (element,
-  // attribute): first old value → the element's CURRENT value, the final
-  // state of the window (classify runs in the same synchronous frame).
+  // One logical change can be several records: collapse per (element,
+  // attribute) to first old value vs the element's current value.
   const seen = new Map<HTMLElement, Map<string, string | null>>()
   for (const r of records) {
     if (r.type !== "attributes") continue
@@ -96,8 +83,7 @@ export function classify(records: MutationRecord[], env: AuditEnv): { ops: Reflo
   for (const [t, attrs] of seen) {
     for (const [name, firstOld] of attrs) {
       const final = t.getAttribute(name)
-      // A no-op write: PM re-sets some attributes (the ProseMirror-widget
-      // class) unconditionally when re-creating widget descs.
+      // PM re-sets the ProseMirror-widget class unconditionally when re-creating widget descs.
       if (firstOld != null && firstOld === final) continue
       if (t === env.stack) {
         ops.push({ kind: "setAttribute", text: `setAttribute ${name} on .paper-stack (scaffold, not content)` })
@@ -121,11 +107,8 @@ export function classify(records: MutationRecord[], env: AuditEnv): { ops: Reflo
 }
 
 export interface ReflowAudit {
-  /** A widget was created (not reused) during this pass. */
   created(el: HTMLElement): void
-  /** The apply step starts: forget everything recorded before now. */
   begin(): void
-  /** The apply step ended: the operations it performed. */
   end(): ReturnType<typeof classify>
   disconnect(): void
 }

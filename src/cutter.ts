@@ -1,13 +1,8 @@
 /**
- * PAGE CUTTER — the document sliced into pages at the layout's breaks, as
- * document nodes. Each page is the slice between two breaks: a break at a
- * unit's start opens a page with that unit, a break inside a paragraph cuts
- * it into real halves, a break between table rows or list items cuts the
- * table or list, and every node the cut runs through is closed on one page
- * and reopened on the next, so nesting survives. A reopened ordered list
- * starts at the number of its first item there. Pure, so the print document
- * is built from the same pages the editor shows, and the cut is testable
- * without a browser.
+ * The document sliced into pages at the layout's breaks, as nodes. Every
+ * node a cut runs through is closed on one page and reopened on the next, so
+ * nesting survives; a reopened ordered list starts at the number of its
+ * first item there. Pure, so print shows the editor's pages.
  */
 import type { Node as PMNode, ResolvedPos } from "prosemirror-model"
 import type { PageBreak } from "./solver"
@@ -15,9 +10,9 @@ import { units } from "./units"
 
 export interface Piece {
   node: PMNode
-  /** The piece ends at a cut: the rest of it is on the next page. */
+  /** Ends at a cut: the rest is on the next page. */
   continued: boolean
-  /** How many levels deep the piece starts inside a cut (0: it starts whole). */
+  /** How many levels deep it starts inside a cut (0: it starts whole). */
   continuation: number
 }
 

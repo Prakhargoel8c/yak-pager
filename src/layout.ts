@@ -1,24 +1,17 @@
 /**
- * LAYOUT — page geometry and the rendering vocabulary of "a page".
- *
- * The trick that makes rule 3 possible: the editor is ONE continuous flow.
- * A page is not a container; it is a region of the flow. Sheet backgrounds
- * are painted by CSS on .paper-stack, and each break inserts a gap widget
- * whose box is the entire inter-page space — band plus the ragged bottom
- * (--push) — so the block after it lands exactly on the next page's content
- * start with no margin of its own. Content therefore never moves between
- * pages, and no block's DOM is ever touched by reflow: PM's DOM observer
- * reconciles attribute writes on blocks by rebuilding them, but it ignores
- * everything inside/on widgets (ignoreMutation).
+ * Page geometry and the rendering of "a page". The editor is one continuous
+ * flow; a page is a region of it. Sheets are painted by CSS on .paper-stack,
+ * and each break inserts a gap widget whose box is the whole inter-page
+ * space (band + the ragged bottom, --push), so the block after it lands on
+ * the next page's content start with no margin of its own. Reflow never
+ * touches block DOM: PM rebuilds a block whose attributes are written, but
+ * ignores everything inside widgets.
  *
  * Flow coordinates (y=0 is the first content pixel of page 1):
  *   page k content:   [start_k, start_k + contentH)
  *   sheet k:          [start_k - top, start_k - top + SHEET_H)
- *   desk gap:         DESK_GAP between sheets
- *   band at a break:  bottom margin + DESK_GAP + top margin
  *
- * applyGeometry is the only writer of the geometry CSS variables; styles.css
- * reads them and repeats no number from here.
+ * applyGeometry is the only writer of the geometry CSS variables.
  */
 import type { PageBreak } from "./solver"
 
@@ -30,7 +23,7 @@ const BLEED = 8 // shadow room inside the SVG tile, each side
 const TILE_W = SHEET_W + 2 * BLEED
 const TILE_H = SHEET_H + 2 * BLEED
 
-/** Page margins in inches, the document's `margins` attr (schema.ts). */
+/** In inches: the document's `margins` attr. */
 export interface Margins {
   top: number
   right: number
@@ -54,15 +47,13 @@ export function marginsOf(attr: unknown): Margins {
   return g
 }
 
-/** A page's geometry in px for a set of margins. */
+/** In px. */
 export interface PageGeometry {
   top: number
   right: number
   bottom: number
   left: number
-  /** Writable width of a page: the editor's text column. */
   contentW: number
-  /** Writable height of a page: the solver's pageHeight. */
   contentH: number
   /** Inter-page space at a break: bottom margin + desk gap + top margin. */
   band: number
@@ -81,19 +72,16 @@ export function pageGeometry(m: Margins): PageGeometry {
   }
 }
 
-/** The geometry a document's margins attr asks for. */
 export const geometryOf = (docAttrs: Record<string, unknown>) => pageGeometry(marginsOf(docAttrs.margins))
 
 export interface Page {
   /** Flow y of the page's first content pixel. */
   start: number
-  /** Content height on the page. */
   fill: number
-  /** How the page opens: at a block boundary, inside a split block, or not at all (page 1). */
+  /** At a block boundary, inside a split block, or not at all (page 1). */
   opening: "between" | "inside" | null
 }
 
-/** What a pagination pass computes: where the pages are, for a geometry. */
 export interface Layout {
   geometry: PageGeometry
   breaks: PageBreak[]
@@ -106,11 +94,7 @@ export const emptyLayout = (geometry: PageGeometry): Layout => ({
   pages: [{ start: 0, fill: 0, opening: null }],
 })
 
-/**
- * Point the CSS at a geometry. Every geometry variable styles.css reads is
- * written here, and nowhere else. Change-checked, so an unchanged geometry
- * writes nothing.
- */
+/** Change-checked: an unchanged geometry writes nothing. */
 export function applyGeometry(stack: HTMLElement, g: PageGeometry) {
   const vars: Array<[string, number]> = [
     ["--sheet-w", SHEET_W],
@@ -144,13 +128,7 @@ function setStyleIfChanged(el: HTMLElement, prop: "backgroundImage" | "backgroun
   if (el.style[prop] !== value) el.style[prop] = value
 }
 
-/**
- * Paint one sheet per page behind the flow, one CSS background layer per
- * sheet, plus enough stack padding to complete the last sheet. Positions
- * are the layout's page starts, so overflowing pages are handled by the
- * same mechanism. Assignments are change-checked, so a stable layout
- * writes nothing.
- */
+/** One background layer per page at its start, plus stack padding to complete the last sheet. Change-checked. */
 export function paintSheets(stack: HTMLElement, layout: Layout) {
   const { pages, geometry: g } = layout
   const image = Array(pages.length).fill(`url("${SHEET_URI}")`).join(", ")
@@ -163,12 +141,11 @@ export function paintSheets(stack: HTMLElement, layout: Layout) {
 }
 
 /**
- * The gap widget: its box is the whole inter-page space (band + --push in
- * CSS), its children sit at fixed offsets below the ragged bottom, so a
- * pooled element's internals never change when its break moves. Between two
- * table rows it is a <tr> with one cell spanning the table. The page number
- * is drawn by CSS from data-num, not as text, so a selection across a page
- * boundary never picks it up.
+ * The gap widget. Its children sit at fixed offsets below the ragged bottom,
+ * so a pooled element's internals never change when its break moves; between
+ * two table rows it is a <tr> with one cell spanning the table. The page
+ * number is drawn by CSS from data-num, so a selection across a page boundary
+ * never picks it up.
  */
 export function makeGapDOM(pageIdx: number, row: boolean): HTMLElement {
   const el = document.createElement(row ? "tr" : "div")
@@ -189,7 +166,7 @@ export function setGapColspan(row: HTMLElement, span: number) {
   if (cell.colSpan !== span) cell.colSpan = span
 }
 
-/** --push is the ragged space above the gap; --inset how far inside a list it sits (its visuals reach back out). Change-checked. */
+/** --push: the ragged space above the gap. --inset: how far inside a list it sits (its visuals reach back out). Change-checked. */
 export function setGapVar(widgetEl: HTMLElement, name: "--push" | "--inset", px: number) {
   const v = `${px}px`
   if (widgetEl.style.getPropertyValue(name) !== v) widgetEl.style.setProperty(name, v)

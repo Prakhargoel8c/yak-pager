@@ -1,10 +1,5 @@
-/*
- * Page geometry is written by applyGeometry (src/layout.ts) as CSS variables
- * on .paper-stack: --sheet-w, --bleed, --tile-w, --tile-h, --margin-*,
- * --content-h and --band. Nothing here repeats a number from layout.ts.
- * .paper-stack's padding-top is margin-top + bleed so that background
- * layer k's y-position equals the solver's pageStarts[k] exactly.
- */
+/* Page geometry comes from applyGeometry (src/layout.ts) as CSS variables on
+   .paper-stack; nothing here repeats a number from there. */
 :root {
   --desk: #d8dde5;
   --ink: #1f2328;
@@ -116,10 +111,9 @@ body {
 }
 
 .paper-stack {
-  /* Content box = one sheet, so the editor's side padding leaves the same
-     column print uses. The side padding is the tile's bleed: the tile is
-     painted from the padding edge, so its sheet starts exactly at the
-     content edge. */
+  /* Content box = one sheet. The side padding is the tile's bleed: the tile is
+     painted from the padding edge, so its sheet starts at the content edge,
+     and padding-top puts background layer k at the solver's pageStarts[k]. */
   width: var(--sheet-w);
   margin: 24px auto;
   padding: calc(var(--margin-top) + var(--bleed)) var(--bleed) 0; /* JS sets padding-bottom */
@@ -129,12 +123,10 @@ body {
   background-color: transparent;
 }
 
-/* The editor spans the full sheet; its horizontal padding is the page's
-   left and right margin. NO vertical padding, NO border, NO margins on
-   blocks — the flow must start exactly at the first page's content origin,
-   and block spacing must live inside the measured boxes (padding), where
-   margin collapsing cannot touch it. Block typography is generated from
-   src/typography.ts (main.ts installs it). */
+/* Horizontal padding is the page margin. No vertical padding, border or block
+   margins: the flow must start at the first page's content origin, and block
+   spacing lives inside the measured boxes (padding), beyond margin collapsing.
+   Block typography is generated from src/typography.ts. */
 #paper .ProseMirror {
   position: relative;
   outline: none;
@@ -143,15 +135,13 @@ body {
   caret-color: var(--accent);
 }
 
-/* Kruti Dev 010 for Hindi (src/kruti.ts re-encodes the text). A document's
-   base font is set on the editor from its doc node's font attr (main.ts);
-   runs in another font carry a fontFamily mark. */
+/* Kruti Dev 010 for Hindi (src/kruti.ts re-encodes the text). */
 @font-face {
   font-family: "Kruti Dev";
   src: url("/fonts/krutidev-010-regular.ttf") format("truetype");
 }
 
-/* Explicit (authorial) page break node: its label */
+/* The explicit page break's label */
 #paper .ProseMirror [data-page-break]::after {
   content: "explicit page break";
   position: absolute;
@@ -167,15 +157,10 @@ body {
   outline-offset: 2px;
 }
 
-/* ---------- the gap widget band ----------
-   The widget IS the inter-page space: its box height is the band (bottom
-   margin + desk gap + top margin, --band from applyGeometry) plus
-   --push (the ragged space left on the page above), so the block after it
-   flows to the next page's content start with NO margin of its own —
-   pagination never touches block DOM. Its absolutely positioned children
-   are offset by the same --push: everything below is at a fixed offset from
-   the ragged bottom, so the pooled element's *internals never change when
-   the break moves* — only its insertion position does. */
+/* ---------- the gap widget ----------
+   Its box is the whole inter-page space: the band plus --push, the ragged
+   space left on the page above. Its children are offset by the same --push,
+   so a pooled element's internals never change when its break moves. */
 .page-gap {
   position: relative;
   height: calc(var(--band) + var(--push, 0px));
@@ -194,7 +179,7 @@ body {
 .page-gap .gap-num {
   position: absolute;
   top: var(--push, 0px);
-  height: var(--margin-bottom); /* the bottom margin of the sheet above */
+  height: var(--margin-bottom);
   left: calc(-1 * var(--margin-left) - var(--inset, 0px));
   right: calc(-1 * var(--margin-right));
   display: flex;
@@ -207,24 +192,16 @@ body {
   content: attr(data-num);
 }
 
-/* In-paragraph placement: a break that splits a paragraph draws the same
-   widget between two words. A float is pulled out of baseline layout, and a
-   cleared line must start below its bottom edge, so the words after it land
-   exactly on the next page's content start — the invisible line-height box
-   ("strut") of a normal text line never adds to the widget's own height
-   (verified by tests/spike.mjs; the inline-block alternative fails this by
-   +10px). The browser aligns the float's top edge with the carried line's
-   line-box top, which is the quantity MEASURE reports as the split
-   candidate's height (measureSplitCandidates in measure.ts). */
+/* Inside a paragraph the widget is a float: out of baseline layout, so the
+   line's strut never adds to its height (an inline-block lands 10px low),
+   and a cleared line starts exactly below it. See design_decisions.md. */
 #paper .ProseMirror p .page-gap {
   float: left;
   clear: both;
   width: 100%;
 }
 
-/* Between two table rows the widget is a row whose one cell spans the
-   table; the cell has no padding or border of its own, so the row is
-   exactly the widget's height. */
+/* Between two rows the widget is a row; its one cell adds nothing to its height. */
 #paper .ProseMirror tr.page-gap > td {
   padding: 0;
   border: 0;
@@ -497,12 +474,9 @@ body {
   margin-bottom: 8px;
 }
 
-/* ---------- print preview (spike) ----------
-   Approach C's in-app preview: the print document itself, rendered in an
-   iframe and scaled to fit. The same iframe prints, so the preview and the
-   printout are one rendering. While loading, the overlay keeps visibility
-   hidden (not display: none) so the iframe still lays out and can be
-   measured. */
+/* ---------- print preview ----------
+   While loading, visibility: hidden (not display: none) so the iframe still
+   lays out and can be measured. */
 #print-modal {
   position: fixed;
   inset: 0;
@@ -555,8 +529,7 @@ body {
   flex: 1;
   overflow: auto;
 }
-/* The zoom box carries the scale transform; its width and height are set
-   from JS so the scaled iframe still centers and scrolls correctly. */
+/* Width and height are set from JS so the scaled iframe still centers and scrolls. */
 .pm-zoom {
   transform-origin: top left;
   margin: 24px auto;
