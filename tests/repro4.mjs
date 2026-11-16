@@ -111,15 +111,15 @@ ${MEASURE_FN}
 
 const breaks = () =>
   page.evaluate(() =>
-    window.__pager.key.getState(window.__pager.view.state).breaks.map(
+    window.__pager.layout.breaks.map(
       (b) => b.pos + ":" + Math.round(b.remaining)
     )
   )
 
 const binfo = () =>
   page.evaluate(() => {
-    const { view, key } = window.__pager
-    const b = key.getState(view.state).breaks[0]
+    const { view, layout } = window.__pager
+    const b = layout.breaks[0]
     const $p = view.state.doc.resolve(b.pos)
     return { break: b.pos, start: $p.start(), end: $p.end() }
   })

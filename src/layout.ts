@@ -1,47 +1,35 @@
 /**
- * LAYOUT — geometry and the rendering vocabulary of "a page", as plain
- * constants. CSS (styles.css) and this module must agree; the numbers meet
- * in exactly one place each, documented on both sides.
+ * LAYOUT — page geometry and the rendering vocabulary of "a page".
  *
  * The trick that makes rule 3 possible: the editor is ONE continuous flow.
  * A page is not a container; it is a region of the flow. Sheet backgrounds
  * are painted by CSS on .paper-stack, and each break inserts a gap widget
- * whose box is the entire inter-page space — band (216px) plus the ragged
- * bottom (--push) — so the block after it lands exactly on the next page's
- * content start with no margin of its own. Content therefore never moves
- * between pages, and no block's DOM is ever touched by reflow: PM's DOM
- * observer reconciles attribute writes on blocks by rebuilding them, but
- * it ignores everything inside/on widgets (ignoreMutation).
+ * whose box is the entire inter-page space — band plus the ragged bottom
+ * (--push) — so the block after it lands exactly on the next page's content
+ * start with no margin of its own. Content therefore never moves between
+ * pages, and no block's DOM is ever touched by reflow: PM's DOM observer
+ * reconciles attribute writes on blocks by rebuilding them, but it ignores
+ * everything inside/on widgets (ignoreMutation).
  *
  * Flow coordinates (y=0 is the first content pixel of page 1):
- *   page k content:   [start_k, start_k + 864)
- *   sheet k:          [start_k - 96, start_k + 960)   (1in margins)
- *   desk gap:         24px between sheets
- *   band at a break:  216px = 96 (bottom margin) + 24 (desk) + 96 (top margin)
- *   period:           864 + 216 = 1080px when no page overflows
+ *   page k content:   [start_k, start_k + contentH)
+ *   sheet k:          [start_k - top, start_k - top + SHEET_H)
+ *   desk gap:         DESK_GAP between sheets
+ *   band at a break:  bottom margin + DESK_GAP + top margin
  *
- * A break inserts exactly band + remaining px of space, so the block after
- * the break lands precisely on the next page's content start. Every visual
- * anchored to a page boundary is therefore at a *fixed* offset from the
- * break — widget internals never need to change when a break moves.
+ * applyGeometry is the only writer of the geometry CSS variables; styles.css
+ * reads them and repeats no number from here.
  */
 
 export const PX_PER_IN = 96
-export const MARGIN = 96 // 1in
 export const SHEET_W = 8.5 * PX_PER_IN // 816
 export const SHEET_H = 11 * PX_PER_IN // 1056
-export const CONTENT_H = SHEET_H - 2 * MARGIN // 864 — the solver's pageHeight
 export const DESK_GAP = 24
 export const BLEED = 8 // shadow room inside the SVG tile, each side
-export const TILE_W = SHEET_W + 2 * BLEED // 832
-export const TILE_H = SHEET_H + 2 * BLEED // 1072
-export const FLOW_PERIOD = CONTENT_H + 216 // 1080 (BAND imported type-only; value must match solver)
+export const TILE_W = SHEET_W + 2 * BLEED
+export const TILE_H = SHEET_H + 2 * BLEED
 
-/**
- * Page margins in inches, the document's `margins` attr (schema.ts).
- * Everything above is the default 1in geometry; a document with other
- * margins gets its geometry from pageGeometry.
- */
+/** Page margins in inches, the document's `margins` attr (schema.ts). */
 export interface Margins {
   top: number
   right: number
@@ -71,6 +59,8 @@ export interface PageGeometry {
   right: number
   bottom: number
   left: number
+  /** Writable width of a page: the editor's text column. */
+  contentW: number
   /** Writable height of a page: the solver's pageHeight. */
   contentH: number
   /** Inter-page space at a break: bottom margin + desk gap + top margin. */
@@ -79,21 +69,70 @@ export interface PageGeometry {
 
 export function pageGeometry(m: Margins): PageGeometry {
   const [top, right, bottom, left] = [m.top, m.right, m.bottom, m.left].map((v) => v * PX_PER_IN)
-  return { top, right, bottom, left, contentH: SHEET_H - top - bottom, band: bottom + DESK_GAP + top }
+  return {
+    top,
+    right,
+    bottom,
+    left,
+    contentW: SHEET_W - left - right,
+    contentH: SHEET_H - top - bottom,
+    band: bottom + DESK_GAP + top,
+  }
 }
 
+/** The geometry a document's margins attr asks for. */
+export const geometryOf = (docAttrs: Record<string, unknown>) => pageGeometry(marginsOf(docAttrs.margins))
+
+export interface BreakInfo {
+  /**
+   * Doc position of the first content on the new page (where the widget is
+   * drawn): a block start, or a word inside a paragraph when the break
+   * splits it.
+   */
+  pos: number
+  /** Ragged space left on the page above — the push, carried by the widget. */
+  remaining: number
+}
+
+export interface Page {
+  /** Flow y of the page's first content pixel. */
+  start: number
+  /** Content height on the page. */
+  fill: number
+  /** How the page opens: at a block boundary, inside a split block, or not at all (page 1). */
+  opening: "between" | "inside" | null
+}
+
+/** What a pagination pass computes: where the pages are, for a geometry. */
+export interface Layout {
+  geometry: PageGeometry
+  breaks: BreakInfo[]
+  pages: Page[]
+}
+
+export const emptyLayout = (geometry: PageGeometry): Layout => ({
+  geometry,
+  breaks: [],
+  pages: [{ start: 0, fill: 0, opening: null }],
+})
+
 /**
- * Point the CSS at a geometry: the editor's side padding, the stack's top
- * padding and the gap widget's band all read these variables (styles.css).
- * Change-checked, so an unchanged geometry writes nothing.
+ * Point the CSS at a geometry. Every geometry variable styles.css reads is
+ * written here, and nowhere else. Change-checked, so an unchanged geometry
+ * writes nothing.
  */
 export function applyGeometry(stack: HTMLElement, g: PageGeometry) {
   const vars: Array<[string, number]> = [
+    ["--sheet-w", SHEET_W],
+    ["--bleed", BLEED],
+    ["--tile-w", TILE_W],
+    ["--tile-h", TILE_H],
     ["--margin-top", g.top],
     ["--margin-right", g.right],
     ["--margin-bottom", g.bottom],
     ["--margin-left", g.left],
     ["--content-h", g.contentH],
+    ["--band", g.band],
   ]
   for (const [name, px] of vars) {
     const v = `${px}px`
@@ -115,17 +154,17 @@ function setStyleIfChanged(el: HTMLElement, prop: "backgroundImage" | "backgroun
 }
 
 /**
- * Paint `n` sheets behind the flow, one CSS background layer per sheet, plus
- * enough stack padding to complete the last sheet. Positions come from the
- * solver's pageStarts, so overflowing pages (whose start drifts past the
- * 1080px period) are handled by the same mechanism — no special cases.
- * Assignments are change-checked, so a stable layout writes nothing.
+ * Paint one sheet per page behind the flow, one CSS background layer per
+ * sheet, plus enough stack padding to complete the last sheet. Positions
+ * are the layout's page starts, so overflowing pages are handled by the
+ * same mechanism. Assignments are change-checked, so a stable layout
+ * writes nothing.
  */
-export function paintSheets(stack: HTMLElement, pageStarts: number[], fills: number[], g: PageGeometry) {
-  const n = pageStarts.length
-  const image = Array(n).fill(`url("${SHEET_URI}")`).join(", ")
-  const position = pageStarts.map((s) => `0px ${s}px`).join(", ")
-  const fillLast = fills[fills.length - 1] ?? 0
+export function paintSheets(stack: HTMLElement, layout: Layout) {
+  const { pages, geometry: g } = layout
+  const image = Array(pages.length).fill(`url("${SHEET_URI}")`).join(", ")
+  const position = pages.map((p) => `0px ${p.start}px`).join(", ")
+  const fillLast = pages[pages.length - 1]?.fill ?? 0
   const paddingBottom = Math.max(0, g.bottom + g.contentH + BLEED - fillLast)
   setStyleIfChanged(stack, "backgroundImage", image)
   setStyleIfChanged(stack, "backgroundPosition", position)
@@ -139,9 +178,9 @@ export function paintSheets(stack: HTMLElement, pageStarts: number[], fills: num
  *
  * All children are absolutely positioned relative to the widget, offset by
  * the CSS variable --push = `remaining` (the ragged space above). From the
- * widget's top: [0, push) is the rest of the writable area, [push, push+96)
- * is the bottom margin (page number lives here), [push+96, push+120) is the
- * desk gap, [push+120, push+216) is the next sheet's top margin.
+ * widget's top: [0, push) is the rest of the writable area, then the bottom
+ * margin (page number lives here), the desk gap, and the next sheet's top
+ * margin.
  */
 export function makeGapWidgetDOM(pageIdx: number): HTMLElement {
   const el = document.createElement("div")

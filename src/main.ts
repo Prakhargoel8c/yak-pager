@@ -7,19 +7,22 @@ import { history, undo, redo } from "prosemirror-history"
 import { buildSeedDoc, LANGUAGES } from "./seed"
 import type { Language } from "./seed"
 import { paginationPlugin, paginationKey, requestFullRecompute, setMeasurer } from "./paginationPlugin"
-import type { Measurer, ReflowReport } from "./paginationPlugin"
-import { compareWithDom } from "./pretextMeasure"
+import type { MeasurerKind } from "./paginationPlugin"
+import type { ReflowReport } from "./reflowAudit"
+import { compareWithDom } from "./measurers"
+import { typographyCSS } from "./typography"
 import { buildToolbar, insertPageBreak, insertHardBreak } from "./toolbar"
 import { buildPrintPreviewButtons } from "./printPreview"
 import { createDevPanel } from "./devPanel"
 import { installApiMeter } from "./apiMeter"
 import { FONTS, isFontKey } from "./fonts"
 import type { FontKey } from "./fonts"
+import type { Layout, PageGeometry } from "./layout"
 import "./styles.css"
 
 // Paragraphs and headings are measured with Pretext; ?measure=dom reads them from the DOM instead.
 const params = new URLSearchParams(location.search)
-const measurer: Measurer = params.get("measure") === "dom" ? "dom" : "pretext"
+const measurer: MeasurerKind = params.get("measure") === "dom" ? "dom" : "pretext"
 // ?lang=hi|hi-unicode|mixed|ml|kn loads the seed document in Hindi (Kruti
 // Dev or Unicode), English mixed with Kruti Dev, Malayalam (Gayathri) or
 // Kannada; English otherwise.
@@ -28,6 +31,11 @@ const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 
 // Count costly browser calls in each pagination pass, for the dev panel.
 installApiMeter()
+
+// Block typography, from the one table print and Pretext also use.
+const typography = document.createElement("style")
+typography.textContent = typographyCSS("#paper .ProseMirror", FONTS.georgia.family)
+document.head.append(typography)
 
 const paperHost = document.getElementById("paper")!
 const panel = createDevPanel(document.getElementById("panel")!)
@@ -80,26 +88,33 @@ buildPrintPreviewButtons(view, document.getElementById("toolbar")!)
 document.getElementById("toolbar")!.append(measurerSelect(), languageSelect())
 panel.attach(view)
 
-  // Poke at the editor from the console: window.__pager.view.state.doc, ...
-  // (also used by tests/e2e.mjs to verify widget placement against the doc —
-  // the key is how it reads the pagination state out of the built bundle).
-  ; (window as unknown as {
-    __pager: {
-      view: EditorView
-      key: typeof paginationKey
-      measurer: Measurer
-      reflows: ReflowReport[]
-      compareWithDom: () => ReturnType<typeof compareWithDom>
-    }
-  }).__pager = {
-    view,
-    key: paginationKey,
-    reflows,
-    get measurer() {
-      return paginationKey.getState(view.state)!.measurer
-    },
-    compareWithDom: () => compareWithDom(view),
+// Poke at the editor from the console: window.__pager.view.state.doc, ...
+// The tests read the layout and geometry from here.
+;(window as unknown as {
+  __pager: {
+    view: EditorView
+    key: typeof paginationKey
+    measurer: MeasurerKind
+    layout: Layout
+    geometry: PageGeometry
+    reflows: ReflowReport[]
+    compareWithDom: () => ReturnType<typeof compareWithDom>
   }
+}).__pager = {
+  view,
+  key: paginationKey,
+  reflows,
+  get measurer() {
+    return paginationKey.getState(view.state)!.measurer
+  },
+  get layout() {
+    return paginationKey.getState(view.state)!.layout
+  },
+  get geometry() {
+    return paginationKey.getState(view.state)!.layout.geometry
+  },
+  compareWithDom: () => compareWithDom(view),
+}
 
 /** Switches the measurer live and keeps ?measure= in the URL, so a reload keeps the choice. */
 function measurerSelect(): HTMLSelectElement {
@@ -109,7 +124,7 @@ function measurerSelect(): HTMLSelectElement {
     sel.append(new Option(label, value, false, value === measurer))
   }
   sel.onchange = () => {
-    const next = sel.value as Measurer
+    const next = sel.value as MeasurerKind
     const url = new URL(location.href)
     if (next === "dom") url.searchParams.set("measure", "dom")
     else url.searchParams.delete("measure")

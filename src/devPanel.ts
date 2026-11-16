@@ -22,7 +22,7 @@ import { API_KIND } from "./apiMeter"
 import type { EditorView } from "prosemirror-view"
 import type { Node as PMNode } from "prosemirror-model"
 import { NodeSelection, TextSelection } from "prosemirror-state"
-import type { ReflowReport } from "./paginationPlugin"
+import type { ReflowReport } from "./reflowAudit"
 import { requestFullRecompute } from "./paginationPlugin"
 
 export interface DevPanel {

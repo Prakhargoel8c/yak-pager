@@ -1,106 +1,54 @@
 /**
- * PAGINATION PLUGIN — three separable pieces:
+ * PAGINATION PLUGIN — scheduling, dispatch and widgets around the pass:
  *
- *   (a) MEASURE  walk top-level blocks, read heights (batched DOM reads,
- *                cache in a WeakMap keyed by Node identity), invalidate only
- *                the transaction's changed range via tr.mapping. Paragraphs
- *                additionally report their line boundaries as split
- *                candidates for the solver.
- *   (b) SOLVE    pure — see solver.ts. Never touches the DOM.
- *   (c) DECORATE turn break positions into a DecorationSet: one pooled gap
- *                widget per break — between two blocks, or between two
- *                words when the break splits a paragraph. The widget's box
- *                (calc(216px + var(--push)) in CSS) is the entire
- *                inter-page space — band plus ragged bottom — so no block
- *                DOM is ever touched. It is moved with insertBefore when a
- *                break moves.
+ *   pass.ts      MEASURE + SOLVE: doc, geometry, measurers, dirty range and
+ *                cache in, layout out. Never dispatches.
+ *   this file    DECORATE: turn the layout's breaks into a DecorationSet —
+ *                one pooled gap widget per break, between two blocks or
+ *                between two words when the break splits a paragraph. The
+ *                widget's box (band + --push in CSS) is the entire
+ *                inter-page space, so no block DOM is ever touched. It is
+ *                moved with insertBefore when a break moves.
  *
  * Scheduling: apply() only does position bookkeeping — it NEVER reads the
  * DOM, because it runs inside the transaction. The plugin's view marks
  * nothing more than "dirty" and runs the pass in a microtask: right after
  * the transaction that dirtied it, before the browser paints, once for all
- * transactions dispatched in the same task.
- * The pass batches all reads first, solves on pure numbers, then applies
- * everything in ONE meta-transaction. That transaction carries no steps, so
- * it never enters history: Ctrl+Z undoes typing, never pagination.
+ * transactions dispatched in the same task. The pass batches all reads
+ * first, solves on pure numbers, then everything is applied in ONE
+ * meta-transaction. That transaction carries no steps, so it never enters
+ * history: Ctrl+Z undoes typing, never pagination.
  *
- * A MutationObserver brackets the dispatch to record every DOM operation
- * the reflow performed — the empirical rule-3 log shown in the dev panel.
+ * The reflow audit (reflowAudit.ts) records the DOM operations the apply
+ * step performed, for the dev panel.
  */
 import { Plugin, PluginKey } from "prosemirror-state"
 import type { Transaction, EditorState } from "prosemirror-state"
 import { Decoration, DecorationSet } from "prosemirror-view"
 import type { EditorView } from "prosemirror-view"
 import type { Node as PMNode } from "prosemirror-model"
-import { solve } from "./solver"
 import { startMeter, stopMeter } from "./apiMeter"
-import type { ApiCounts } from "./apiMeter"
-import type { SplitCandidate } from "./solver"
-import { applyGeometry, makeGapWidgetDOM, marginsOf, pageGeometry, paintSheets, setPush } from "./layout"
-import { measureBlock } from "./measure"
-import { clearInlineBoxes, editorColumn, measureWithPretext } from "./pretextMeasure"
-import { clearCache as clearPretextCache } from "@chenglou/pretext"
+import { applyGeometry, emptyLayout, geometryOf, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
+import type { BreakInfo, Layout } from "./layout"
 import type { MeasuredBlock } from "./measure"
-
-export interface BreakInfo {
-  /**
-   * Doc position of the first content on the new page (where the widget is
-   * drawn): a block start, or a word inside a paragraph when the break
-   * splits it.
-   */
-  pos: number
-  /** Ragged space left on the page above — the push, carried by the widget. */
-  remaining: number
-}
+import { domMeasurer, pretextMeasurer } from "./measurers"
+import { runPass } from "./pass"
+import { createReflowAudit } from "./reflowAudit"
+import type { ReflowAudit, ReflowReport } from "./reflowAudit"
 
 export interface PaginationState {
   decos: DecorationSet
-  breaks: BreakInfo[]
-  pageCount: number
+  layout: Layout
   /** Doc-coordinate range that must be re-measured before the next solve. */
   dirty: { from: number; to: number } | null
-  /** How paragraphs and headings are measured; see Measurer. */
-  measurer: Measurer
+  /** How paragraphs and headings are measured; see MeasurerKind. */
+  measurer: MeasurerKind
   /**
    * A full re-measure was requested (fonts loaded, resize, measurer or
-   * document switch): the next pass also drops Pretext's cached widths and
-   * line boxes, which may have been measured in a fallback font.
+   * document switch): the next pass also drops what the measurers cached,
+   * which may have been measured in a fallback font.
    */
   full: boolean
-}
-
-export type OpKind =
-  | "setAttribute"
-  | "removeAttribute"
-  | "insertBefore"
-  | "create"
-  | "remove"
-  | "other"
-
-export interface ReflowOps {
-  setAttribute: number
-  removeAttribute: number
-  insertBefore: number
-  create: number
-  remove: number
-  other: number
-}
-
-export interface ReflowReport {
-  pass: number
-  pageCount: number
-  breakPositions: number[]
-  remainders: number[]
-  durationMs: number
-  measuredCount: number
-  totalBlocks: number
-  /** Time spent measuring, solving, and applying the result. */
-  phaseMs: { measure: number; solve: number; apply: number }
-  /** Costly browser API calls made while measuring and while applying (apiMeter.ts). */
-  apiCalls: { measure: ApiCounts; apply: ApiCounts }
-  fullRecompute: boolean
-  ops: Array<{ kind: OpKind; text: string }>
-  counts: ReflowOps
 }
 
 export const paginationKey = new PluginKey<PaginationState>("pagination")
@@ -108,23 +56,20 @@ export const paginationKey = new PluginKey<PaginationState>("pagination")
 /** Meta: the pass reports fresh layout (no steps — invisible to history). */
 interface LayoutMeta {
   type: "layout"
-  breaks: BreakInfo[]
-  pageCount: number
-  pageStarts: number[]
-  fills: number[]
+  layout: Layout
 }
 /** Meta: fonts/resize/image — re-measure everything (heights can change without the doc changing). */
 interface FullMeta {
   type: "full"
   /** Switch measurers; the full re-measure that follows uses the new one. */
-  measurer?: Measurer
+  measurer?: MeasurerKind
 }
 
 export function requestFullRecompute(view: EditorView) {
   view.dispatch(view.state.tr.setMeta(paginationKey, { type: "full" } satisfies FullMeta))
 }
 
-export function setMeasurer(view: EditorView, measurer: Measurer) {
+export function setMeasurer(view: EditorView, measurer: MeasurerKind) {
   view.dispatch(view.state.tr.setMeta(paginationKey, { type: "full", measurer } satisfies FullMeta))
 }
 
@@ -172,30 +117,26 @@ function unionRange(
 /* ------------------------------------------------------------------ */
 
 /**
- * "pretext" (the default) computes paragraphs and headings with Pretext
- * (pretextMeasure.ts) and reads only the blocks it can't model from the
- * DOM. "dom" reads every block's layout from the DOM (measure.ts).
+ * "pretext" (the default) computes paragraphs and headings with Pretext and
+ * reads only the blocks it can't model from the DOM. "dom" reads every
+ * block's layout from the DOM.
  */
-export type Measurer = "dom" | "pretext"
+export type MeasurerKind = "dom" | "pretext"
 
 export function paginationPlugin(
-  options: { onReflow?: (report: ReflowReport) => void; measurer?: Measurer } = {}
+  options: { onReflow?: (report: ReflowReport) => void; measurer?: MeasurerKind } = {}
 ) {
-  // Per-editor resources shared by state.apply and the view code below.
-  // The widget pool is what "the single reused page-gap widget" means
-  // concretely: element i is created once and re-inserted forever after.
+  // The widget pool, shared by state.apply and the view: element i is
+  // created once and re-inserted forever after.
   const pool = new Map<number, HTMLElement>()
-  // Purely needed for the devPanel to get the right info.
-  // Nothing to do with the core pagination.
-  const createdThisPass = new Set<HTMLElement>()
-  let passCount = 0
+  let audit: ReflowAudit | null = null
 
   const takeFromPool = (i: number) => {
     let el = pool.get(i)
     if (!el) {
       el = makeGapWidgetDOM(i)
       pool.set(i, el)
-      createdThisPass.add(el)
+      audit?.created(el)
     } else {
       // The break moved and PM is re-creating this widget's desc while the
       // pooled element is still attached at the OLD position. Detach it
@@ -212,10 +153,9 @@ export function paginationPlugin(
     key: paginationKey,
 
     state: {
-      init: (): PaginationState => ({
+      init: (_, state): PaginationState => ({
         decos: DecorationSet.empty,
-        breaks: [],
-        pageCount: 1,
+        layout: emptyLayout(geometryOf(state.doc.attrs)),
         dirty: null,
         measurer: options.measurer ?? "pretext",
         full: false,
@@ -246,18 +186,14 @@ export function paginationPlugin(
           }
         }
 
-        // We need both remapRange and changedRange because the UI doesn't get updated
-        // for every transaction. One pass runs per task (a microtask), so several transactions
-        // might have happened before the call. Therefore, we need to find out the changes
-        // in the current transaction as well as combine them with the previous transactions.
+        // One pass runs per task, so several transactions may precede it:
+        // the dirty range carries over, remapped, and widens by this one.
         const dirty = unionRange(remapRange(prev.dirty, tr), touchedRange(tr))
         let next: PaginationState = { ...prev, decos: prev.decos.map(tr.mapping, tr.doc), dirty }
 
         const meta = tr.getMeta(paginationKey) as LayoutMeta | undefined
-        // This is a layout signal from runPass.
-        // We set the new widget decorations and wipe off the dirty state.
         if (meta && meta.type === "layout") {
-          const widgets = meta.breaks.map((b, i) =>
+          const widgets = meta.layout.breaks.map((b, i) =>
             Decoration.widget(b.pos, () => takeFromPool(i), {
               key: `page-gap-${i}`,
               side: -1,
@@ -266,8 +202,7 @@ export function paginationPlugin(
           )
           next = {
             ...next,
-            breaks: meta.breaks,
-            pageCount: meta.pageCount,
+            layout: meta.layout,
             decos: DecorationSet.create(tr.doc, widgets),
             dirty: null,
             full: false,
@@ -283,28 +218,19 @@ export function paginationPlugin(
       },
     },
 
-    view(editorView: EditorView) {
-      const view = editorView
+    view(view: EditorView) {
       const stack = view.dom.parentElement as HTMLElement
       if (!stack) throw new Error("paginationPlugin: editor must be mounted inside .paper-stack")
 
-      // MEASURE cache — keyed by Node object identity. PM nodes are
-      // immutable values: editing a paragraph produces a *different* Node,
-      // while untouched blocks keep theirs across the transaction.
+      // MEASURE cache — keyed by Node object identity, owned per editor.
       const cache = new WeakMap<PMNode, MeasuredBlock>()
+      const reflowAudit = createReflowAudit(stack, view.dom)
+      audit = reflowAudit
 
       let queued = false
       let pendingFull = false
       let destroyed = false
-
-      // This is needed to pass info to the devPanel
-      const mo = new MutationObserver(() => {})
-      mo.observe(stack, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeOldValue: true,
-      })
+      let passCount = 0
 
       const schedule = (full = false) => {
         if (destroyed) return
@@ -315,136 +241,11 @@ export function paginationPlugin(
         // dispatches its own meta-transaction.
         queueMicrotask(() => {
           queued = false
-          runPass()
+          pass()
         })
       }
 
-      const gapName = (el: HTMLElement) => `.page-gap-${el.dataset.page}`
-
-      const classify = (records: MutationRecord[]) => {
-        const ops: Array<{ kind: OpKind; text: string }> = []
-        const counts: ReflowOps = {
-          setAttribute: 0,
-          removeAttribute: 0,
-          insertBefore: 0,
-          create: 0,
-          remove: 0,
-          other: 0,
-        }
-
-        // Widgets first: a move can surface as one record (node in both
-        // added and removed) or as separate remove+add records, so reduce
-        // to a net disposition per element before classifying.
-        const net = new Map<HTMLElement, { added: boolean; removed: boolean }>()
-        const otherChildList: MutationRecord[] = []
-        const textSplits: MutationRecord[] = []
-        for (const r of records) {
-          if (r.type !== "childList") continue
-          // Moving a widget that sits between two words re-splits the
-          // paragraph's text nodes around the new position — a few #text
-          // nodes appear and disappear while no element changes. That is
-          // part of the move, not churn, so it counts as an insertBefore
-          // (the paragraph element and its content keep their identity).
-          const nodes = [...r.addedNodes, ...r.removedNodes]
-          const allText = nodes.length > 0 && nodes.every((n) => n.nodeType === 3)
-          if (allText) {
-            textSplits.push(r)
-            continue
-          }
-          const gaps = nodes.filter(
-            (n): n is HTMLElement =>
-              n instanceof HTMLElement && n.classList.contains("page-gap")
-          )
-          if (gaps.length === 0) otherChildList.push(r)
-          for (const g of gaps) {
-            const d = net.get(g) ?? { added: false, removed: false }
-            if (Array.from(r.addedNodes).includes(g)) d.added = true
-            if (Array.from(r.removedNodes).includes(g)) d.removed = true
-            net.set(g, d)
-          }
-        }
-        for (const [el, d] of net) {
-          if (d.removed && !d.added) {
-            ops.push({ kind: "remove", text: `remove ${gapName(el)} (page count shrank)` })
-          } else if (d.added && !d.removed && createdThisPass.has(el)) {
-            ops.push({ kind: "create", text: `create ${gapName(el)} (page count grew)` })
-          } else {
-            ops.push({
-              kind: "insertBefore",
-              text: `insertBefore ${gapName(el)} (element reused, not rebuilt)`,
-            })
-          }
-        }
-        for (const r of textSplits) {
-          ops.push({
-            kind: "insertBefore",
-            text: `re-split #text in ${(r.target as HTMLElement).nodeName.toLowerCase()} (inline widget moved)`,
-          })
-        }
-
-        // Attribute records: prosemirror-view patches a style decoration by
-        // removing the old properties and then appending the new value, so
-        // one logical change can appear as two records. Collapse per
-        // (element, attribute) to the logical operation: firstOldValue →
-        // the element's CURRENT value, which is the final state of the
-        // window (classify runs in the same synchronous frame).
-        const seen = new Map<HTMLElement, Map<string, string | null>>()
-        for (const r of records) {
-          if (r.type !== "attributes") continue
-          const t = r.target as HTMLElement
-          let m = seen.get(t)
-          if (!m) seen.set(t, (m = new Map()))
-          if (!m.has(r.attributeName!)) m.set(r.attributeName!, r.oldValue)
-        }
-        for (const [t, attrs] of seen) {
-          for (const [name, firstOld] of attrs) {
-            const final = t.getAttribute(name)
-            // Skip no-op writes (oldValue == current value): PM
-            // unconditionally re-sets some attributes (e.g. the
-            // ProseMirror-widget class) when re-creating widget descs.
-            if (firstOld != null && firstOld === final) continue
-            if (t === stack) {
-              ops.push({
-                kind: "setAttribute",
-                text: `setAttribute ${name} on .paper-stack (scaffold, not content)`,
-              })
-            } else if (t.classList?.contains("page-gap")) {
-              ops.push({
-                kind: "setAttribute",
-                text: `setAttribute ${name}="${final ?? ""}" on ${gapName(t)} (${name === "style" ? "--push" : "housekeeping"})`,
-              })
-            } else if (name === "style" && t.parentElement === view.dom) {
-              const hadBefore = firstOld != null && firstOld.includes("margin-top")
-              const hasNow = final != null && final.includes("margin-top")
-              if (hasNow) {
-                ops.push({
-                  kind: "setAttribute",
-                  text: `setAttribute style "${final}" on ${t.nodeName.toLowerCase()} (push to next page)`,
-                })
-              } else if (hadBefore) {
-                ops.push({
-                  kind: "removeAttribute",
-                  text: `removeAttribute style on ${t.nodeName.toLowerCase()} (no longer after a break)`,
-                })
-              }
-            } else {
-              ops.push({ kind: "other", text: `attribute ${name} on ${t.nodeName}` })
-            }
-          }
-        }
-        for (const r of otherChildList) {
-          const n = r.addedNodes[0] ?? r.removedNodes[0]
-          ops.push({
-            kind: "other",
-            text: `childList ${r.addedNodes.length ? "+" : "-"}${n?.nodeName ?? "?"} under ${r.target.nodeName}`,
-          })
-        }
-
-        for (const op of ops) counts[op.kind]++
-        return { ops, counts }
-      }
-
-      const runPass = () => {
+      const pass = () => {
         if (destroyed) return
         const state = paginationKey.getState(view.state)!
         const full = pendingFull
@@ -452,114 +253,52 @@ export function paginationPlugin(
         // Idempotence guard: with no dirty range and nothing new to measure,
         // a pass must do nothing at all.
         if (!full && state.dirty == null && passCount > 0) return
-        createdThisPass.clear()
         const t0 = performance.now()
-        const usePretext = state.measurer === "pretext"
-        const measureCalls = startMeter()
-        // A full pass follows fonts loading or a resize: widths Pretext
-        // measured before a font loaded are the fallback font's.
-        if (full && usePretext) {
-          clearPretextCache()
-          clearInlineBoxes()
-        }
 
-        // -------- (a) MEASURE: batched DOM reads, then nothing but reads --
-        // All getBoundingClientRect calls happen before any write, so the
-        // browser performs layout once, not interleaved read/write cycles.
-        // The document's margins set the column width Pretext reads and the
-        // page height the solver fills; the CSS follows them first.
-        const geometry = pageGeometry(marginsOf(view.state.doc.attrs.margins))
+        // The document's margins set the column width the measurers read
+        // and the page height the solver fills; the CSS follows them first.
+        const geometry = geometryOf(view.state.doc.attrs)
         applyGeometry(stack, geometry)
-        const blockEls = topBlockElements(view.dom)
-        const column = usePretext ? editorColumn(view) : null
-        const blocks: { pos: number; end: number; height: number; forced: boolean; splitCandidates?: SplitCandidate[] }[] = []
-        let measured = 0
-        let i = 0
-        view.state.doc.forEach((node: PMNode, offset: number) => {
-          const el = blockEls[i++]
-          const pos = offset
-          const end = offset + node.nodeSize
-          const contentStart = offset + 1 // past the block's opening token
-          const inDirty = state.dirty != null && pos < state.dirty.to && end > state.dirty.from
-          let m = cache.get(node)
-          if (full || m === undefined || inDirty) {
-            // getBoundingClientRect().height, not offsetHeight: offsetHeight
-            // rounds to integers and the error accumulates across a page.
-            m = (column ? measureWithPretext(node, column) : null) ?? measureBlock(view, el, node, contentStart)
-            cache.set(node, m)
-            measured++
-          }
-          // measureBlock also returns split candidates.
-          // This is needed by the solved to correctly split a node if needed.
-          // But these positions are local to a node, so we make it absolute here.
-          const splitCandidates =
-            m.splitCandidates?.map((s) => ({ pos: contentStart + s.pos, height: s.height })) ??
-            undefined
-          blocks.push({
-            pos,
-            end,
-            height: m.height,
-            forced: node.type.name === "pageBreak",
-            splitCandidates: splitCandidates,
-          })
-        })
-
+        const measureCalls = startMeter()
+        const measurers =
+          state.measurer === "pretext" ? [pretextMeasurer(view), domMeasurer(view)] : [domMeasurer(view)]
+        const result = runPass({ doc: view.state.doc, geometry, measurers, dirty: state.dirty, full, cache })
         stopMeter()
-        const t1 = performance.now()
+        const { layout } = result
 
-        // -------- (b) SOLVE: pure, on numbers only ------------------------
-        const { breaks: solved, pageStarts, fills } = solve(
-          blocks.map((b) => ({ pos: b.pos, height: b.height, splits: b.splitCandidates })),
-          geometry.contentH,
-          blocks.filter((b) => b.forced).map((b) => b.pos),
-          geometry.band
-        )
-        const breaks: BreakInfo[] = solved.map((s) => ({
-          pos: s.pos,
-          remaining: s.remaining,
-        }))
-
+        // DECORATE: one meta-transaction, audited.
+        reflowAudit.begin()
         const t2 = performance.now()
-
-        // -------- (c) DECORATE: one meta-transaction ----------------------
-        mo.takeRecords() // discard anything before this point
         const applyCalls = startMeter()
-        paintSheets(stack, pageStarts, fills, geometry)
-        view.dispatch(
-          view.state.tr.setMeta(paginationKey, {
-            type: "layout",
-            breaks,
-            pageCount: breaks.length + 1,
-            pageStarts,
-            fills,
-          } satisfies LayoutMeta)
-        )
-        // Sync the widget visuals (--push). PM ignores mutations on
-        // widgets (ignoreMutation), so these writes never trigger DOM
+        paintSheets(stack, layout)
+        view.dispatch(view.state.tr.setMeta(paginationKey, { type: "layout", layout } satisfies LayoutMeta))
+        // Sync the widget visuals (--push). PM ignores mutations on widgets
+        // (ignoreMutation), so these writes never trigger DOM
         // reconciliation. Every write is change-checked: a stable layout
         // performs zero DOM operations.
-        syncView(breaks, pool)
+        syncView(layout.breaks, pool)
         stopMeter()
-        const records = mo.takeRecords()
+        const { ops, counts } = reflowAudit.end()
         const t3 = performance.now()
 
-        const { ops, counts } = classify(records)
         passCount++
         options.onReflow?.({
           pass: passCount,
-          pageCount: breaks.length + 1,
-          breakPositions: breaks.map((b) => b.pos),
-          remainders: breaks.map((b) => b.remaining),
+          pageCount: layout.pages.length,
+          breakPositions: layout.breaks.map((b) => b.pos),
+          remainders: layout.breaks.map((b) => b.remaining),
           durationMs: t3 - t0,
-          measuredCount: measured,
-          totalBlocks: blocks.length,
-          phaseMs: { measure: t1 - t0, solve: t2 - t1, apply: t3 - t2 },
+          measuredCount: result.measured,
+          totalBlocks: result.total,
+          phaseMs: { measure: result.ms.measure, solve: result.ms.solve, apply: t3 - t2 },
           apiCalls: { measure: measureCalls, apply: applyCalls },
           fullRecompute: full,
           ops,
           counts,
         })
       }
+
+      schedule()
 
       return {
         update() {
@@ -568,7 +307,8 @@ export function paginationPlugin(
         },
         destroy() {
           destroyed = true
-          mo.disconnect()
+          reflowAudit.disconnect()
+          audit = null
           for (const el of pool.values()) el.remove()
           pool.clear()
         },
@@ -578,30 +318,11 @@ export function paginationPlugin(
 }
 
 /**
- * Top-level block DOM elements, in document order, with gap widgets skipped.
- */
-function topBlockElements(dom: HTMLElement): (HTMLElement | null)[] {
-  const out: (HTMLElement | null)[] = []
-  for (const n of Array.from(dom.childNodes)) {
-    if (n instanceof Text) {
-      if (n.textContent && n.textContent.trim() !== "") {
-        console.warn("pagination: stray text node at top level")
-        out.push(null)
-      }
-      continue
-    }
-    if (!(n instanceof HTMLElement)) continue
-    if (n.classList.contains("page-gap")) continue
-    out.push(n)
-  }
-  return out
-}
-
-/**
  * Align the view with the computed layout: point each pooled widget's --push
  * at the fresh `remaining`. The widget's own box height derives from --push
- * in CSS (calc(216px + var(--push))), so this one write IS the push. Writes
- * are change-checked, so an unchanged layout performs zero DOM operations.
+ * in CSS (calc(var(--band) + var(--push))), so this one write IS the push.
+ * Writes are change-checked, so an unchanged layout performs zero DOM
+ * operations.
  */
 function syncView(breaks: BreakInfo[], pool: Map<number, HTMLElement>) {
   breaks.forEach((b, i) => {

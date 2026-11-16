@@ -8,16 +8,16 @@
  * document shift the paragraph's doc positions.
  */
 import type { EditorView } from "prosemirror-view"
-import type { Node as PMNode } from "prosemirror-model"
 import type { SplitCandidate } from "./solver"
+import type { Unit } from "./units"
 
 /**
  * One measured top-level block: height plus, for paragraphs, split
  * candidates. Split positions are stored RELATIVE to the paragraph's
  * content start: a cache hit after an insertion elsewhere in the document
  * must survive it, and doc positions inside the node shift while the
- * node-local offsets do not. runPass converts them back to absolute doc
- * positions with the block's current offset.
+ * node-local offsets do not. The pass converts them back to absolute doc
+ * positions with the unit's current content start.
  */
 export interface MeasuredBlock {
   height: number
@@ -38,12 +38,7 @@ export interface MeasuredBlock {
  *     each line, so candidates describe the paragraph as if it were not
  *     split and pass N+1 reproduces the same numbers.
  */
-export function measureBlock(
-  view: EditorView,
-  el: HTMLElement | null,
-  node: PMNode,
-  contentStart: number
-): MeasuredBlock {
+export function measureBlock(view: EditorView, el: HTMLElement | null, unit: Unit): MeasuredBlock {
   if (!el) return { height: 0, splitCandidates: null }
   const rect = el.getBoundingClientRect()
   const allRects = Array.from(
@@ -60,9 +55,7 @@ export function measureBlock(
   let height = rect.height
   for (const r of widgetRects) height -= r.height
   const splits =
-    node.type.name === "paragraph"
-      ? measureSplitCandidates(view, el, rect, widgetRects, contentStart)
-      : null
+    unit.kind === "splittable" ? measureSplitCandidates(view, el, rect, widgetRects, unit.contentStart) : null
   return { height, splitCandidates: splits }
 }
 
@@ -183,7 +176,7 @@ function measureSplitCandidates(
   for (let i = 1; i < lines.length; i++) {
     const L = lines[i]
     out.push({
-      // Node-local offset: contentStart is added back in runPass, so a
+      // Node-local offset: contentStart is added back by the pass, so a
       // cached candidate stays correct when insertions elsewhere shift
       // the paragraph's doc positions.
       pos: view.posAtDOM(L.firstWord.node, L.firstWord.start) - contentStart,
