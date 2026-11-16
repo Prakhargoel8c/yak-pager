@@ -60,19 +60,21 @@ const sameSplits = (a: SplitCandidate[] | null, b: SplitCandidate[] | null) =>
  * height off by half a pixel or more, or different split candidates. For
  * checking the Pretext path against the DOM (tests/pretext-compare.mjs).
  */
-export function compareWithDom(view: EditorView): { compared: number; diffs: MeasureDiff[] } {
+export function compareWithDom(view: EditorView): { compared: number; diffs: MeasureDiff[]; rows: { pos: number; dom: number; pretext: number }[] } {
   const pretext = pretextMeasurer(view)
   const dom = domMeasurer(view)
   const diffs: MeasureDiff[] = []
+  const rows: { pos: number; dom: number; pretext: number }[] = []
   let compared = 0
   units(view.state.doc).forEach((unit, index) => {
     const p = pretext.measure(unit)
     if (!p) return
     compared++
     const d = dom.measure(unit)!
+    if (unit.row) rows.push({ pos: unit.row.pos, dom: d.height, pretext: p.height })
     if (Math.abs(d.height - p.height) >= 0.5 || !sameSplits(d.splitCandidates, p.splitCandidates)) {
       diffs.push({ index, offset: unit.pos, type: unit.node.type.name, text: unit.node.textContent.slice(0, 80), dom: d, pretext: p })
     }
   })
-  return { compared, diffs }
+  return { compared, diffs, rows }
 }

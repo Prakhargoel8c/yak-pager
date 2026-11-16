@@ -27,6 +27,22 @@ export function blockStyle(node: PMNode): BlockStyle | null {
   return null
 }
 
+/**
+ * Table geometry. Borders are separate (no collapsing): every cell draws its
+ * right and bottom border, first-column cells also their left, and the
+ * table its top. A row's height is then max(cell content) + 2 × padY +
+ * border, whatever its place in the table; the table's top border and the
+ * space below it belong to its first and last row.
+ */
+export const TABLE = { padX: 8, padY: 6, border: 1, tail: 10, minCol: 25, line: "#c3c9d2", head: "#f3f5f8" }
+
+/** A block inside a table cell: no block spacing, and bold in a header cell. */
+export function cellBlockStyle(node: PMNode, header: boolean): BlockStyle | null {
+  const s = blockStyle(node)
+  if (!s) return null
+  return { ...s, padTop: 0, padBottom: 0, weight: header && node.type.name === "paragraph" ? 700 : s.weight }
+}
+
 export const INK = "#1f2328"
 
 /** How the column flows text; the edge-line probe lays text out with the same settings. */
@@ -47,5 +63,14 @@ ${scope} h2 { ${block(HEADINGS[2])} }
 ${scope} h3 { ${block(HEADINGS[3])} }
 ${scope} hr { border: none; border-top: 2px solid #c3c9d2; padding: 14px 0; }
 ${scope} [data-page-break] { border-top: 1px dashed #c5221f; padding: 6px 0 10px; position: relative; user-select: none; }
+${scope} .tableWrapper { padding-bottom: ${TABLE.tail}px; }
+${scope} table { border-collapse: separate; border-spacing: 0; table-layout: fixed; border-top: ${TABLE.border}px solid ${TABLE.line}; }
+${scope} td, ${scope} th { box-sizing: border-box; padding: ${TABLE.padY}px ${TABLE.padX}px; border: 0 solid ${TABLE.line}; border-width: 0 ${TABLE.border}px ${TABLE.border}px 0; vertical-align: top; text-align: start; font-weight: 400; position: relative; }
+${scope} th { font-weight: 700; background: ${TABLE.head}; }
+${scope} tr > :first-child { border-left-width: ${TABLE.border}px; }
+${scope} td > *, ${scope} th > * { margin: 0; padding: 0; }
+${scope} .page-gap + tr > *, ${scope} .table-continued tr:first-child > * { box-shadow: inset 0 ${TABLE.border}px 0 ${TABLE.line}; }
+${scope} .table-continued table { border-top-width: 0; }
+${scope} .table-continues { padding-bottom: 0; }
 `
 }

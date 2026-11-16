@@ -399,7 +399,7 @@ try {
     ["wide", { top: 1, right: 2, bottom: 1, left: 2 }],
     ["edit", { top: 0.6, right: 0.5, bottom: 1.4, left: 1.25 }],
   ]
-  for (const lang of ["", "?lang=hi", "?lang=mixed", "?lang=ml"]) {
+  for (const lang of ["", "?lang=hi", "?lang=mixed", "?lang=ml", "?lang=table"]) {
     await open(lang)
     for (const [preset, m] of MARGINS) {
       await page.select(".margins-select", preset)
@@ -462,6 +462,143 @@ try {
     }))
     check(back.margins.top === 1 && back.margins.left === 1 && back.select === "normal" && back.padding === "96px", `${lang || "English"} undo restores 1in margins`, JSON.stringify(back))
   }
+
+  // Tables paginate row by row. Every row's Pretext height (each cell's
+  // blocks at its column's width) must match its <tr>, every page must
+  // open at a row or block boundary with the row whole on one page, and
+  // the gap between two rows must be a row of the table landing the next
+  // row exactly on the next page's content start.
+  const tableLayout = async (label) => {
+    const r = await page.evaluate(() => {
+      const { view, layout, geometry } = window.__pager
+      const { rows } = window.__pager.compareWithDom()
+      const origin = view.dom.getBoundingClientRect().top
+      const starts = layout.pages.map((p) => p.start)
+      const out = []
+      let worst = 0
+      for (const row of rows) worst = Math.max(worst, Math.abs(row.dom - row.pretext))
+      for (const tr of view.dom.querySelectorAll("tr:not(.page-gap)")) {
+        const b = tr.getBoundingClientRect()
+        const k = starts.findLastIndex((s) => s <= b.top - origin + 0.5)
+        if (k < 0 || b.bottom - origin > starts[k] + geometry.contentH + 0.5) out.push(`row "${tr.textContent.slice(0, 20)}" crosses a page edge`)
+        if (tr.querySelector(".page-gap")) out.push(`a gap inside row "${tr.textContent.slice(0, 20)}"`)
+      }
+      let between = 0
+      layout.breaks.forEach((br, i) => {
+        const parent = view.state.doc.resolve(br.pos).parent
+        const gap = view.dom.querySelector(`.page-gap[data-page="${i}"]`)
+        if (!gap) return void out.push(`gap ${i} missing`)
+        if (Math.abs(gap.getBoundingClientRect().bottom - origin - starts[i + 1]) > 0.5) out.push(`gap ${i} lands ${gap.getBoundingClientRect().bottom - origin}, page starts ${starts[i + 1]}`)
+        if (parent.type.name !== "table") return
+        between++
+        if (gap.tagName !== "TR" || gap.parentElement.tagName !== "TBODY") out.push(`gap ${i} is a ${gap.tagName} in a ${gap.parentElement.tagName}`)
+        if (gap.nextElementSibling !== view.nodeDOM(br.pos)) out.push(`gap ${i} is not right before its row`)
+      })
+      return { rows: rows.length, worst, between, out }
+    })
+    check(r.rows > 0 && r.worst < 0.5, `${label}: ${r.rows} rows, Pretext row heights match the DOM`, `worst ${r.worst.toFixed(2)}px`)
+    check(r.between > 0, `${label}: ${r.between} page break(s) between table rows`)
+    check(r.out.length === 0, `${label}: rows whole on their page, gaps land the next row on its page`, r.out.slice(0, 4).join("; "))
+  }
+
+  console.log("— Tables")
+  await open("?lang=table")
+  await report("tables")
+  await tableLayout("table document")
+
+  // Grow the last row on the first page that ends inside a table until it
+  // no longer fits: the row moves whole to the next page.
+  const lastRowBefore = await page.evaluate(() => {
+    const { view, layout } = window.__pager
+    const k = layout.breaks.findIndex((b) => view.state.doc.resolve(b.pos).parent.type.name === "table")
+    const tr = view.dom.querySelector(`.page-gap[data-page="${k}"]`).previousElementSibling
+    const cell = tr.lastElementChild.querySelector("p")
+    const pos = view.posAtDOM(cell, cell.childNodes.length)
+    view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, pos)))
+    view.focus()
+    return { k, pos: view.posAtDOM(tr, 0) - 1, breaks: layout.breaks.map((b) => b.pos) }
+  })
+  await page.keyboard.type(" and more words typed into a cell, enough to make its row taller than the room left on the page.".repeat(2))
+  await sleep(600)
+  const moved = await page.evaluate((k) => window.__pager.layout.breaks[k].pos, lastRowBefore.k)
+  check(moved !== lastRowBefore.breaks[lastRowBefore.k], "typing into the last row on a page moves the break above that row", `${lastRowBefore.breaks[lastRowBefore.k]} → ${moved}`)
+  await tableLayout("after typing into a cell")
+
+  await page.select(".margins-select", "narrow")
+  await sleep(400)
+  await tableLayout("narrow margins")
+  await page.select(".margins-select", "wide")
+  await sleep(400)
+  await tableLayout("wide margins")
+
+  console.log("— print preview of the table document")
+  await open("?lang=table")
+  await page.$eval(".preview-c", (el) => el.click())
+  await page.waitForSelector("#print-modal:not(.pm-loading)")
+  const printed = await page.evaluate(async () => {
+    const { view, layout } = window.__pager
+    const frame = document.querySelector(".pm-frame").contentDocument
+    await frame.fonts.ready
+    const sheets = [...frame.querySelectorAll(".sheet")]
+    const bounds = [0, ...layout.breaks.map((b) => b.pos), view.state.doc.content.size]
+    const mismatch = []
+    const outside = []
+    const rowsDiffer = []
+    const live = [...view.dom.querySelectorAll("tr:not(.page-gap)")].map((tr) => tr.getBoundingClientRect().height)
+    const print = [...frame.querySelectorAll("tr")].map((tr) => tr.getBoundingClientRect().height)
+    live.forEach((h, i) => Math.abs(h - print[i]) > 0.5 && rowsDiffer.push(i))
+    sheets.forEach((sheet, k) => {
+      const text = [...sheet.children].filter((el) => !el.classList.contains("page-num")).map((el) => el.textContent).join("")
+      if (text !== view.state.doc.textBetween(bounds[k], bounds[k + 1], "", "")) mismatch.push(k + 1)
+      const cs = getComputedStyle(sheet)
+      const r = sheet.getBoundingClientRect()
+      const bottom = r.bottom - parseFloat(cs.paddingBottom)
+      for (const tr of sheet.querySelectorAll("tr")) if (tr.getBoundingClientRect().bottom > bottom + 0.5) outside.push(`sheet ${k + 1}: ${tr.textContent.slice(0, 20)}`)
+    })
+    return { sheets: sheets.length, pages: layout.pages.length, tables: frame.querySelectorAll("table").length, mismatch, outside, rowsDiffer, rows: print.length }
+  })
+  await page.keyboard.press("Escape")
+  check(printed.sheets === printed.pages, "one printed sheet per layout page", `${printed.sheets} sheets, ${printed.pages} pages`)
+  check(printed.mismatch.length === 0, "every sheet holds the text between the editor's breaks", `mismatch on sheets ${printed.mismatch.join(", ")}`)
+  check(printed.outside.length === 0, "every printed row sits inside its sheet's writable area", printed.outside.slice(0, 3).join("; "))
+  check(printed.rowsDiffer.length === 0, `${printed.rows} printed rows as tall as on screen, in ${printed.tables} printed table pieces`, `rows ${printed.rowsDiffer.slice(0, 5).join(", ")}`)
+
+  console.log("— a table in the Kruti Dev document, from the toolbar")
+  await open("?lang=hi")
+  const krutiText = await page.evaluate(() => {
+    let s = ""
+    window.__pager.view.state.doc.descendants((n) => {
+      if (n.isText && !n.marks.length && s.length < 300) s += n.text
+    })
+    return s
+  })
+  await select(await endOfParagraph(6))
+  await page.click(".insert-table")
+  for (let i = 0; i < 9; i++) {
+    await page.keyboard.type(krutiText.slice(i * 25, i * 25 + 12 + ((i * 37) % 80)))
+    await page.keyboard.press("Tab")
+  }
+  await sleep(600)
+  const inserted = await page.evaluate(() => {
+    let rows = 0, header = 0
+    window.__pager.view.state.doc.descendants((n) => {
+      if (n.type.name === "tableRow") rows++
+      if (n.type.name === "tableHeader") header++
+    })
+    return { rows, header }
+  })
+  check(inserted.rows === 3 && inserted.header === 3, "the toolbar inserts a 3 × 3 table with a header row", JSON.stringify(inserted))
+  await report("Kruti Dev table")
+  // Push the table down to a page edge with empty paragraphs above it.
+  await select(await endOfParagraph(5))
+  for (let i = 0; i < 40; i++) {
+    const brk = await page.evaluate(() => window.__pager.layout.breaks.some((b) => window.__pager.view.state.doc.resolve(b.pos).parent.type.name === "table"))
+    if (brk) break
+    await page.keyboard.press("Enter")
+    await sleep(30)
+  }
+  await sleep(400)
+  await tableLayout("Kruti Dev table at a page edge")
 } finally {
   await browser.close()
   try { process.kill(-server.pid) } catch {}

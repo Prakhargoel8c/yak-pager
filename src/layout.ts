@@ -132,6 +132,7 @@ export function applyGeometry(stack: HTMLElement, g: PageGeometry) {
     ["--margin-bottom", g.bottom],
     ["--margin-left", g.left],
     ["--content-h", g.contentH],
+    ["--content-w", g.contentW],
     ["--band", g.band],
   ]
   for (const [name, px] of vars) {
@@ -187,6 +188,31 @@ export function makeGapWidgetDOM(pageIdx: number): HTMLElement {
   el.className = "page-gap"
   el.dataset.page = String(pageIdx)
   el.setAttribute("contenteditable", "false")
+  el.append(...gapVisuals(pageIdx))
+  return el
+}
+
+/**
+ * The gap between two table rows: a row of its own, one cell spanning every
+ * column, holding the same visuals. Its height is the band plus --push, like
+ * the block widget's.
+ */
+export function makeGapRowDOM(pageIdx: number): HTMLElement {
+  const el = document.createElement("tr")
+  el.className = "page-gap"
+  el.dataset.page = String(pageIdx)
+  el.setAttribute("contenteditable", "false")
+  const cell = el.appendChild(document.createElement("td"))
+  cell.append(...gapVisuals(pageIdx))
+  return el
+}
+
+export function setGapColspan(row: HTMLElement, span: number) {
+  const cell = row.firstChild as HTMLTableCellElement
+  if (cell.colSpan !== span) cell.colSpan = span
+}
+
+function gapVisuals(pageIdx: number): HTMLElement[] {
   const rule = document.createElement("div")
   rule.className = "gap-rule"
   const num = document.createElement("div")
@@ -194,8 +220,7 @@ export function makeGapWidgetDOM(pageIdx: number): HTMLElement {
   // Drawn by CSS (::after) from this attribute, not as text, so selecting
   // or copying across a page boundary never picks up the number.
   num.dataset.num = String(pageIdx + 1)
-  el.append(rule, num)
-  return el
+  return [rule, num]
 }
 
 /** Point the gap's visuals at a new `remaining`. Change-checked: idempotent. */

@@ -62,7 +62,7 @@ export function runPass({ doc, geometry, measurers, dirty, full, cache }: PassIn
     }
     // Split candidates are cached relative to the unit's content start.
     const splits = m.splitCandidates?.map((s) => ({ pos: u.contentStart + s.pos, height: s.height }))
-    blocks.push({ pos: u.pos, height: m.height, splits })
+    blocks.push({ pos: u.pos, height: m.height + u.extra, splits })
     if (u.kind === "forced") forced.push(u.pos)
   }
   const t1 = performance.now()

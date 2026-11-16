@@ -102,6 +102,35 @@ MEASURE for paragraphs and headings uses [Pretext](https://github.com/chenglou/p
 
 ---
 
+# 6. Tables are HTML tables, paginated row by row
+
+The schema follows TipTap's table extension (`table` > `tableRow` > `tableCell` | `tableHeader`, cells hold blocks, cell attrs `colspan`, `rowspan`, `colwidth`), built with `prosemirror-tables`' `tableNodes`, so it can move into a TipTap editor as is. Editing (cell selection, Tab between cells, column resizing) is `prosemirror-tables` unchanged; the toolbar's "Insert table" adds a 3 × 3 table with a header row. `?lang=table` is the English seed with three tables.
+
+**Rows are units.** `units.ts` places a table row by row (each `atomic`), so a page may end between two rows, never inside one. The first row's unit starts at the table, so a break before it is an ordinary break before the table. A table with a rowspan moves whole for now.
+
+**Measuring a row with Pretext.** A row is as tall as its tallest cell: the cell's blocks stacked at the cell's content width, plus padding and border. That only holds with a few rules, all in `typography.ts` and `tables.ts`:
+
+- `table-layout: fixed` with a `<colgroup>` of whole-pixel widths. A resized column keeps its `colwidth`; the others share the rest of the column, rounded down, the last taking the remainder. The CSS computes the same numbers from `--content-w` (`round(down, …)`), so a margin change needs no JS. Auto layout sizes columns from content, which Pretext can't predict.
+- Separate borders (`border-spacing: 0`): every cell draws its right and bottom border, first-column cells their left, the table its top. Each row's height is then independent of where it sits, and the table's top border and the space below it are the first and last rows' `extra`, added by the pass outside the measure cache.
+- Blocks in a cell have no margin or padding; `vertical-align: top`; header cells are bold, which the cell style tells Pretext.
+
+**The gap between two rows is a row.** The pooled widget for a break before a row is a `<tr>` with one cell spanning every column, placed in the `<tbody>` by the same `Decoration.widget`; its height is band + push like the block widget's. The row after it lands on the next page's content start, and an inset shadow draws its top border there. Print (`cutter.ts`) cuts the table into one table per page with the same rows.
+
+**Why not CSS grid.** Measured by `tests/table-spike.mjs`, which renders every table of `?lang=table` (32 rows: multi-line and uneven cells, a Kruti Dev cell, a Unicode Hindi cell, a colspan, resized columns) and a table in the Kruti Dev document each way, and compares each row with the Pretext prediction:
+
+| rendering | rows off by ≥ 0.5px | a 200px gap before a row |
+| --- | --- | --- |
+| `<table>`, fixed layout, separate borders | 0 / 35 | exact; nothing else moves |
+| `<table>`, `border-collapse: collapse` | 0 / 35 | lands, but rows below move 199.5px and row heights change: the gap row takes half the shared border |
+| `<table>`, auto layout | 29 / 35, worst 168px | — |
+| CSS grid, `display: contents` rows | 0 / 35 | exact |
+
+Grid predicts as well as a fixed table and takes a gap just as cleanly, so the choice came down to editing. `prosemirror-tables` assumes table DOM: in the live editor as a grid, cell selection still works, but dragging a column edge changes nothing on screen — the resize preview writes `<col>` widths, which a grid ignores — and after the drag the doc holds the new `colwidth` while the grid keeps its old track. A grid would need its own column templates, resize preview, `grid-column`/`grid-row` spans for colspan and rowspan, and it drops table semantics for assistive technology. The table needs none of that.
+
+**Open:** a row taller than a page is placed alone and overflows it (it needs splitting at line boundaries across its cells); rowspans move the table whole; the header row isn't repeated on the next page (feasible either way: the gap row can carry a copy of the header in a nested table with the same colgroup, and the solver adds its height to the next page); a column being dragged reflows its rows, but pagination follows only when the drag commits.
+
+---
+
 # Open Questions
 
 ## How to split paragraphs

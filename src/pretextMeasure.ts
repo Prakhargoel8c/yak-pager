@@ -1,5 +1,5 @@
 /**
- * MEASURE without the DOM: paragraph and heading heights, and the paragraph
+ * MEASURE without the DOM: paragraph, heading and table row heights, and the paragraph
  * line boundaries the solver splits at, computed with Pretext
  * (@chenglou/pretext) from the node's text and marks alone.
  *
@@ -16,7 +16,7 @@
  * Block styles come from typography.ts, the same table the editor's CSS is
  * generated from.
  */
-import type { Mark } from "prosemirror-model"
+import type { Mark, Node as PMNode } from "prosemirror-model"
 import type { EditorView } from "prosemirror-view"
 import {
   layoutNextRichInlineLineRange,
@@ -27,7 +27,8 @@ import {
 import type { PreparedRichInline, RichInlineItem, RichInlineLineRange } from "@chenglou/pretext/rich-inline"
 import type { MeasuredBlock } from "./measure"
 import type { SplitCandidate } from "./solver"
-import { TEXT_FLOW, blockStyle } from "./typography"
+import { columnWidths, tableColumns } from "./tables"
+import { TABLE, TEXT_FLOW, blockStyle, cellBlockStyle } from "./typography"
 import type { BlockStyle } from "./typography"
 import type { Unit } from "./units"
 
@@ -199,9 +200,9 @@ interface Line {
 }
 
 /**
- * One block's height and split candidates, or null when the block isn't a
- * paragraph or heading, or holds inline content other than text and hard
- * breaks.
+ * One block's or table row's height and split candidates, or null when the
+ * block isn't a paragraph, heading or row of those, or holds inline content
+ * other than text and hard breaks.
  *
  * Line heights follow CSS for a unitless line-height: each run's inline box
  * is aligned on the baseline (inlineBox), and a line spans from the highest
@@ -210,10 +211,42 @@ interface Line {
  * carried line's line-box top.
  */
 export function measureWithPretext(unit: Unit, column: Column): MeasuredBlock | null {
-  const { node } = unit
-  const style = blockStyle(node)
+  if (unit.row) return measureRow(unit.node, unit.row.table, column)
+  const style = blockStyle(unit.node)
   if (!style) return null
+  const m = measureText(unit.node, style, column)
+  return m && { height: m.height, splitCandidates: unit.kind === "splittable" && m.splits.length > 0 ? m.splits : null }
+}
 
+/**
+ * A table row: the tallest cell, each cell its blocks stacked at the cell's
+ * content width (its columns, less padding and borders), plus the cell's
+ * padding and bottom border. Null when a cell holds a block Pretext can't model.
+ */
+function measureRow(row: PMNode, table: PMNode, column: Column): MeasuredBlock | null {
+  const widths = columnWidths(tableColumns(table), column.width)
+  let col = 0
+  let tallest = 0
+  let supported = true
+  row.forEach((cell) => {
+    const span = cell.attrs.colspan as number
+    const outer = widths.slice(col, col + span).reduce((a, b) => a + b, 0)
+    const width = outer - 2 * TABLE.padX - TABLE.border - (col === 0 ? TABLE.border : 0)
+    col += span
+    const header = cell.type.name === "tableHeader"
+    let height = 0
+    cell.forEach((block) => {
+      const style = cellBlockStyle(block, header)
+      const m = style && measureText(block, style, { ...column, width })
+      if (!m) supported = false
+      else height += m.height
+    })
+    tallest = Math.max(tallest, height)
+  })
+  return supported ? { height: tallest + 2 * TABLE.padY + TABLE.border, splitCandidates: null } : null
+}
+
+function measureText(node: PMNode, style: BlockStyle, column: Column): { height: number; splits: SplitCandidate[] } | null {
   // Every line holds the block's own strut, in its font and size.
   const strut = inlineBox(column.family, style.size, style.lineHeight)
   const items: RichInlineItem[] = []
@@ -265,10 +298,7 @@ export function measureWithPretext(unit: Unit, column: Column): MeasuredBlock | 
     if (i > 0 && line.pos !== null) splits.push({ pos: line.pos, height: style.padTop + top })
     top += line.height
   })
-  return {
-    height: style.padTop + top + style.padBottom,
-    splitCandidates: unit.kind === "splittable" && splits.length > 0 ? splits : null,
-  }
+  return { height: style.padTop + top + style.padBottom, splits }
 }
 
 /**

@@ -16,6 +16,7 @@ import { schema } from "./schema"
 import { FONTS, fontKeyOf, isFontKey } from "./fonts"
 import type { FontKey } from "./fonts"
 import { buildMarginsControl } from "./marginsControl"
+import { insertTable } from "./tables"
 
 const { strong, em, fontSize, fontFamily } = schema.marks
 
@@ -233,7 +234,13 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
   hint.className = "tb-hint"
   hint.textContent = "Ctrl/⌘-Z undoes typing — pagination is never in the undo stack"
 
-  mount.append(strongBtn, emBtn, fontSel, sizeSel, blockSel, alignSel, margins.el, pbBtn, hint)
+  const tableBtn = document.createElement("button")
+  tableBtn.textContent = "Insert table"
+  tableBtn.title = "Insert a 3 × 3 table with a header row"
+  tableBtn.className = "insert-table"
+  tableBtn.onclick = run(insertTable())
+
+  mount.append(strongBtn, emBtn, fontSel, sizeSel, blockSel, alignSel, margins.el, pbBtn, tableBtn, hint)
 
   const sync = () => {
     const { state } = view

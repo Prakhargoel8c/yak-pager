@@ -10,7 +10,8 @@
     "spike": "node tests/spike.mjs",
     "typecheck": "tsc --noEmit",
     "e2e": "node tests/e2e.mjs",
-    "pretext-compare": "node tests/pretext-compare.mjs"
+    "pretext-compare": "node tests/pretext-compare.mjs",
+    "table-spike": "node tests/table-spike.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "1.0.0",
@@ -21,6 +22,7 @@
     "prosemirror-model": "^1.25.11",
     "prosemirror-schema-basic": "^1.2.4",
     "prosemirror-state": "^1.4.4",
+    "prosemirror-tables": "^1.8.5",
     "prosemirror-transform": "^1.12.1",
     "prosemirror-view": "^1.42.3"
   },

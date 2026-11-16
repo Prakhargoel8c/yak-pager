@@ -75,6 +75,7 @@ export const LANGUAGES: Record<string, { label: string; text: SeedText; font: Fo
   mixed: { label: "English + Kruti Dev", text: en as SeedText, font: "georgia", kruti: true },
   ml: { label: "മലയാളം (Gayathri)", text: ml as SeedText, font: "gayathri" },
   kn: { label: "ಕನ್ನಡ", text: kn as SeedText, font: "georgia" },
+  table: { label: "English + tables", text: en as SeedText, font: "georgia" },
 }
 export type Language = keyof typeof LANGUAGES
 
@@ -83,6 +84,7 @@ export function buildSeedDoc(lang: Language = "en"): Node {
   base = font
   kruti = LANGUAGES[lang].kruti ?? false
   if (lang === "mixed") return buildMixedDoc()
+  if (lang === "table") return buildTableDoc()
   const t = LANGUAGES[lang].text
   const children: Node[] = []
 
@@ -137,6 +139,63 @@ function buildMixedDoc(): Node {
       children.push(para(plain(p)))
       if (h.sections[i].paras[j]) children.push(para(text(h.sections[i].paras[j])))
     })
+  })
+  return schema.nodes.doc.create({ font: "georgia" }, children)
+}
+
+/**
+ * The English seed with tables: a small one with a header row, a long one
+ * whose rows break across pages (multi-line and uneven cells, a Kruti Dev
+ * cell, a Unicode Hindi cell, a colspan), and one with resized columns.
+ */
+function buildTableDoc(): Node {
+  const e = en as SeedText
+  const h = hi as SeedText
+  const kruti = (str: string) =>
+    splitKrutiRuns(str).map((r) =>
+      schema.text(r.text, r.kruti ? [schema.marks.fontFamily.create({ family: FONTS.kruti.family })] : [])
+    )
+  const cell = (content: string | Node[], attrs: Record<string, unknown> | null = null, header = false) =>
+    (header ? schema.nodes.tableHeader : schema.nodes.tableCell).create(
+      attrs,
+      schema.nodes.paragraph.create(null, typeof content === "string" ? schema.text(content) : content)
+    )
+  const row = (...cells: Node[]) => schema.nodes.tableRow.create(null, cells)
+  const head = (...titles: string[]) => row(...titles.map((t) => cell(t, null, true)))
+  const table = (...rows: Node[]) => schema.nodes.table.create(null, rows)
+
+  const paras = e.sections.flatMap((s) => s.paras)
+  const hiParas = h.sections.flatMap((s) => s.paras)
+  const small = table(
+    head("Step", "What it reads", "What it writes"),
+    row(cell("Measure"), cell("Pretext line boxes"), cell("Heights and split candidates")),
+    row(cell("Solve"), cell("Heights"), cell("Break positions")),
+    row(cell("Decorate"), cell("Breaks"), cell("One pooled widget per break"))
+  )
+  const long = table(
+    head("#", "Matter", "Notes"),
+    ...Array.from({ length: 24 }, (_, i) => {
+      const n = cell(String(i + 1))
+      if (i === 5) return row(n, cell(kruti(h.sections[0].title)), cell(kruti(hiParas[0].slice(0, 160))))
+      if (i === 9) return row(n, cell("हिन्दी (Unicode)"), cell(hiParas[1].slice(0, 140)))
+      if (i === 13) return row(n, cell(paras[i % paras.length].slice(0, 120), { colspan: 2 }))
+      const words = paras[i % paras.length].split(" ")
+      return row(n, cell(words.slice(0, 2 + (i % 4)).join(" ")), cell(words.slice(0, 6 + ((i * 7) % 40)).join(" ")))
+    })
+  )
+  const resized = table(
+    row(cell("Column", { colwidth: [120] }, true), cell("Width", null, true), cell("Note", { colwidth: [200] }, true)),
+    row(cell("First", { colwidth: [120] }), cell("Shares the rest"), cell(paras[0].slice(0, 90), { colwidth: [200] })),
+    row(cell("Last", { colwidth: [120] }), cell(paras[1].slice(0, 160)), cell("Fixed at 200px", { colwidth: [200] }))
+  )
+
+  const children: Node[] = []
+  buildSeedDoc("en").forEach((node) => {
+    children.push(node)
+    if (node.type.name !== "heading" || node.attrs.level !== 2) return
+    if (node.textContent === e.sections[0].title) children.push(small)
+    if (node.textContent === e.sections[1].title) children.push(long)
+    if (node.textContent === e.sections[3].title) children.push(resized)
   })
   return schema.nodes.doc.create({ font: "georgia" }, children)
 }

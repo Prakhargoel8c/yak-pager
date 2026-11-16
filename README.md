@@ -11,3 +11,5 @@ Then schedule runs the pass in a microtask after each transaction, before the br
 
 Some interesting bits are -
 - split candidates - this is where it calculates split positions of every line in a para.
+
+Tables (`?lang=table`, or the toolbar's Insert table) paginate row by row: each row is an atomic unit, Pretext predicts its height from its cells at their column widths, and the gap between two rows is a table row. See design_decisions.md section 6, and `npm run table-spike` for the table vs CSS grid comparison.

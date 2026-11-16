@@ -222,6 +222,38 @@ body {
   width: 100%;
 }
 
+/* Between two table rows the widget is a row whose one cell spans the
+   table; the cell has no padding or border of its own, so the row is
+   exactly the widget's height. */
+#paper .ProseMirror tr.page-gap > td {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* ---------- tables (prosemirror-tables) ---------- */
+
+#paper .ProseMirror .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(26, 115, 232, 0.15);
+  pointer-events: none;
+}
+#paper .ProseMirror .column-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: -1px;
+  right: -2px;
+  width: 4px;
+  background: var(--accent);
+  pointer-events: none;
+}
+#paper .ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
 /* ---------- dev panel ---------- */
 
 #panel {

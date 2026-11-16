@@ -79,6 +79,7 @@ ${fontFaceCSS()}
   }
 }
 html, body { margin: 0; padding: 0; }
+html { --content-w: ${g.contentW}px; }
 ${typography(".doc", family)}
 /* The one instruction the print engine gets: a forced break before the first
    content of every page the solver carved. */
@@ -92,6 +93,7 @@ ${fontFaceCSS()}
    numbers are drawn by us, so preview and print share one rendering. */
 @page { size: ${PAGE_SIZE}; margin: 0; }
 html, body { margin: 0; padding: 0; }
+html { --content-w: ${g.contentW}px; }
 .sheet {
   width: ${SHEET_W}px;
   height: ${SHEET_H}px;
@@ -140,6 +142,10 @@ function renderPages(view: EditorView): HTMLElement[][] {
       // LAST line of a real paragraph, which browsers leave ragged unless
       // told otherwise.
       if (piece.continued && piece.node.attrs.align === "justify") el.style.setProperty("text-align-last", "justify")
+      // A table cut between rows: as on screen, the space below it is on its
+      // last page only, and its top border on its first.
+      if (piece.continued && piece.node.type.name === "table") el.classList.add("table-continues")
+      if (piece.continuation) el.classList.add("table-continued")
       return el
     })
   )

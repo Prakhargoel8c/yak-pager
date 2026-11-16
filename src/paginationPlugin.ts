@@ -28,7 +28,8 @@ import { Decoration, DecorationSet } from "prosemirror-view"
 import type { EditorView } from "prosemirror-view"
 import type { Node as PMNode } from "prosemirror-model"
 import { startMeter, stopMeter } from "./apiMeter"
-import { applyGeometry, emptyLayout, geometryOf, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
+import { TableMap } from "prosemirror-tables"
+import { applyGeometry, emptyLayout, geometryOf, makeGapRowDOM, makeGapWidgetDOM, paintSheets, setGapColspan, setPush } from "./layout"
 import type { BreakInfo, Layout } from "./layout"
 import type { MeasuredBlock } from "./measure"
 import { domMeasurer, pretextMeasurer } from "./measurers"
@@ -126,16 +127,19 @@ export type MeasurerKind = "dom" | "pretext"
 export function paginationPlugin(
   options: { onReflow?: (report: ReflowReport) => void; measurer?: MeasurerKind } = {}
 ) {
-  // The widget pool, shared by state.apply and the view: element i is
-  // created once and re-inserted forever after.
+  // The widget pools, shared by state.apply and the view: element i is
+  // created once and re-inserted forever after. A break between two table
+  // rows takes its widget from the row pool, `columns` wide.
   const pool = new Map<number, HTMLElement>()
+  const rowPool = new Map<number, HTMLElement>()
   let audit: ReflowAudit | null = null
 
-  const takeFromPool = (i: number) => {
-    let el = pool.get(i)
+  const takeFromPool = (i: number, columns = 0) => {
+    const kind = columns > 0 ? rowPool : pool
+    let el = kind.get(i)
     if (!el) {
-      el = makeGapWidgetDOM(i)
-      pool.set(i, el)
+      el = columns > 0 ? makeGapRowDOM(i) : makeGapWidgetDOM(i)
+      kind.set(i, el)
       audit?.created(el)
     } else {
       // The break moved and PM is re-creating this widget's desc while the
@@ -146,6 +150,7 @@ export function paginationPlugin(
       // block in between — exactly the churn rule 3 forbids.
       el.remove()
     }
+    if (columns > 0) setGapColspan(el, columns)
     return el
   }
 
@@ -193,13 +198,15 @@ export function paginationPlugin(
 
         const meta = tr.getMeta(paginationKey) as LayoutMeta | undefined
         if (meta && meta.type === "layout") {
-          const widgets = meta.layout.breaks.map((b, i) =>
-            Decoration.widget(b.pos, () => takeFromPool(i), {
-              key: `page-gap-${i}`,
+          const widgets = meta.layout.breaks.map((b, i) => {
+            const parent = tr.doc.resolve(b.pos).parent
+            const columns = parent.type.name === "table" ? TableMap.get(parent).width : 0
+            return Decoration.widget(b.pos, () => takeFromPool(i, columns), {
+              key: columns > 0 ? `page-gap-row-${i}-${columns}` : `page-gap-${i}`,
               side: -1,
               marks: [],
             })
-          )
+          })
           next = {
             ...next,
             layout: meta.layout,
@@ -277,6 +284,7 @@ export function paginationPlugin(
         // reconciliation. Every write is change-checked: a stable layout
         // performs zero DOM operations.
         syncView(layout.breaks, pool)
+        syncView(layout.breaks, rowPool)
         stopMeter()
         const { ops, counts } = reflowAudit.end()
         const t3 = performance.now()
@@ -309,8 +317,9 @@ export function paginationPlugin(
           destroyed = true
           reflowAudit.disconnect()
           audit = null
-          for (const el of pool.values()) el.remove()
+          for (const el of [...pool.values(), ...rowPool.values()]) el.remove()
           pool.clear()
+          rowPool.clear()
         },
       }
     },

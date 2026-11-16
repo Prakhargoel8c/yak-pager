@@ -478,6 +478,49 @@ ok(
   `dom=${JSON.stringify(acrossBreak.dom)} doc=${JSON.stringify(acrossBreak.doc)}`
 )
 
+const rowBreak = () =>
+  page.evaluate(() => {
+    const { view, layout } = window.__pager
+    return layout.breaks.findIndex((b) => view.state.doc.resolve(b.pos).parent.type.name === "table")
+  })
+if ((await rowBreak()) >= 0) {
+  console.log("— tables: typing in the last row on a page")
+  // The row before a gap row grows until it no longer fits, and moves to
+  // the next page whole: the reflow moves the pooled gap row, nothing else.
+  const k = await rowBreak()
+  await page.evaluate((k) => {
+    const { view } = window.__pager
+    const tr = view.dom.querySelector(`.page-gap[data-page="${k}"]`).previousElementSibling
+    const p = tr.lastElementChild.querySelector("p")
+    const pos = view.posAtDOM(p, p.childNodes.length)
+    view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, pos)))
+    view.focus()
+  }, k)
+  const passBeforeRow = await page.evaluate(() => window.__pager.reflows.at(-1)?.pass ?? 0)
+  const breakBefore = await page.evaluate((k) => window.__pager.layout.breaks[k].pos, k)
+  await page.keyboard.type(" and more words typed into a table cell until its row no longer fits on the page".repeat(2))
+  await sleep(600)
+  const rowOps = await page.evaluate((after) => {
+    const sum = {}
+    for (const r of window.__pager.reflows.filter((r) => r.pass > after)) {
+      for (const [key, n] of Object.entries(r.counts)) sum[key] = (sum[key] ?? 0) + n
+    }
+    return sum
+  }, passBeforeRow)
+  const rowState = await page.evaluate((k) => {
+    const { view, layout } = window.__pager
+    const b = layout.breaks[k]
+    const gap = view.dom.querySelector(`.page-gap[data-page="${k}"]`)
+    return { pos: b.pos, inTable: view.state.doc.resolve(b.pos).parent.type.name === "table", tag: gap?.tagName, before: gap?.nextElementSibling === view.nodeDOM(b.pos) }
+  }, k)
+  ok(rowState.pos < breakBefore && rowState.inTable, "the grown row moved to the next page whole", `break ${breakBefore} → ${rowState.pos}`)
+  ok(rowState.tag === "TR" && rowState.before, "the gap is a table row right before the moved row")
+  ok((rowOps.other ?? 0) === 0 && (rowOps.create ?? 0) + (rowOps.remove ?? 0) === 0, "typing in a table: the reflow only reused widgets", JSON.stringify(rowOps))
+  ;(await readLanding()).forEach((l, i) => {
+    ok(l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5, `table layout: widget ${i} ends at page ${i + 2} content start`, l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`)
+  })
+}
+
 console.log("— doc.toJSON() carries no page nodes")
 const docDumped = await page.evaluate(() => {
   ;[...document.querySelectorAll(".panel-buttons button")][1].click()

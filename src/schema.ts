@@ -18,7 +18,9 @@
 import { Schema } from "prosemirror-model"
 import type { Node, Mark, DOMOutputSpec } from "prosemirror-model"
 import { nodes as basicNodes, marks as basicMarks } from "prosemirror-schema-basic"
+import { tableNodes } from "prosemirror-tables"
 import { DEFAULT_MARGINS } from "./layout"
+import { tableToDOM } from "./tables"
 
 const { text, hard_break, horizontal_rule } = basicNodes
 
@@ -139,7 +141,24 @@ const fontFamily = {
   },
 }
 
+/** TipTap's table shape: table > tableRow > tableCell | tableHeader, cells hold blocks. */
+const pmTables = tableNodes({ tableGroup: "block", cellContent: "block+", cellAttributes: {} })
+const table = { ...pmTables.table, content: "tableRow+", toDOM: tableToDOM }
+const tableRow = { ...pmTables.table_row, content: "(tableCell | tableHeader)*" }
+
 export const schema = new Schema({
-  nodes: { doc, paragraph, heading, text, hard_break, horizontal_rule, pageBreak },
+  nodes: {
+    doc,
+    paragraph,
+    heading,
+    text,
+    hard_break,
+    horizontal_rule,
+    pageBreak,
+    table,
+    tableRow,
+    tableCell: pmTables.table_cell,
+    tableHeader: pmTables.table_header,
+  },
   marks: { strong, em, fontSize, fontFamily },
 })
