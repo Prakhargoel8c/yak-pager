@@ -46,6 +46,10 @@ function para(...inlines: (string | Node[])[]) {
   return schema.nodes.paragraph.create(null, inlines.flatMap((i) => (typeof i === "string" ? text(i) : i)))
 }
 
+const item = (...blocks: Node[]) => schema.nodes.listItem.create(null, blocks)
+const ul = (items: Node[]) => schema.nodes.bulletList.create(null, items)
+const ol = (items: Node[], start = 1) => schema.nodes.orderedList.create({ start }, items)
+
 /**
  * The seed's words, one file per language. Every language has the same
  * shape, so the document's structure (headings, marks, the justified
@@ -76,6 +80,7 @@ export const LANGUAGES: Record<string, { label: string; text: SeedText; font: Fo
   ml: { label: "മലയാളം (Gayathri)", text: ml as SeedText, font: "gayathri" },
   kn: { label: "ಕನ್ನಡ", text: kn as SeedText, font: "georgia" },
   table: { label: "English + tables", text: en as SeedText, font: "georgia" },
+  list: { label: "English + lists", text: en as SeedText, font: "georgia" },
 }
 export type Language = keyof typeof LANGUAGES
 
@@ -85,6 +90,7 @@ export function buildSeedDoc(lang: Language = "en"): Node {
   kruti = LANGUAGES[lang].kruti ?? false
   if (lang === "mixed") return buildMixedDoc()
   if (lang === "table") return buildTableDoc()
+  if (lang === "list") return buildListDoc()
   const t = LANGUAGES[lang].text
   const children: Node[] = []
 
@@ -96,6 +102,16 @@ export function buildSeedDoc(lang: Language = "en"): Node {
     schema.nodes.paragraph.create({ align: "justify" }, text(t.justified)),
     schema.nodes.horizontal_rule.create()
   )
+  if (lang === "hi") {
+    const [a, b, c] = t.sections
+    children.push(
+      ol([
+        item(para(a.paras[0]), ul([item(para(a.paras[1]), ol([item(para(b.paras[0])), item(para(b.paras[1]))])), item(para(a.paras[2]))])),
+        item(para(c.paras[0]), para(c.paras[1])),
+        item(para(b.paras[2]), ul([item(para(c.paras[2]))])),
+      ])
+    )
+  }
 
   for (const section of t.sections) {
     children.push(heading(2, section.title))
@@ -196,6 +212,32 @@ function buildTableDoc(): Node {
     if (node.textContent === e.sections[0].title) children.push(small)
     if (node.textContent === e.sections[1].title) children.push(long)
     if (node.textContent === e.sections[3].title) children.push(resized)
+  })
+  return schema.nodes.doc.create({ font: "georgia" }, children)
+}
+
+/**
+ * The English seed's words as long nested lists: ordered and bullet lists
+ * four levels deep, bullets inside numbers and numbers inside bullets,
+ * items of several paragraphs, an empty item, and a list starting at 5.
+ */
+function buildListDoc(): Node {
+  const e = en as SeedText
+  const paras = [...e.sections.flatMap((s) => s.paras), ...e.afterBreak.paras, ...e.afterBreak.subParas]
+  let k = 0
+  const next = () => para(paras[k++ % paras.length])
+  const deep = (level: number): Node => {
+    const wrap = level % 2 ? ul : ol
+    if (level === 4) return wrap([item(next(), next()), item(next())])
+    return wrap([item(next(), deep(level + 1)), item(next()), item(next(), deep(level + 1))])
+  }
+  const children: Node[] = [heading(1, e.title), para(e.intro.join("")), schema.nodes.paragraph.create({ align: "justify" }, text(e.justified))]
+  e.sections.forEach((section, i) => {
+    children.push(heading(2, section.title), next())
+    if (i === 0) children.push(ol([item(next(), deep(2)), item(next(), next()), item(para()), item(next(), deep(3))]))
+    else if (i === 1) children.push(ul([item(next(), deep(2)), item(next())]))
+    else if (i === 2) children.push(next(), ol([item(next()), item(next(), deep(3))], 5))
+    else children.push(ol([item(next(), deep(2))]))
   })
   return schema.nodes.doc.create({ font: "georgia" }, children)
 }

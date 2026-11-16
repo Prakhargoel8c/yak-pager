@@ -214,7 +214,7 @@ export function measureWithPretext(unit: Unit, column: Column): MeasuredBlock | 
   if (unit.row) return measureRow(unit.node, unit.row.table, column)
   const style = blockStyle(unit.node)
   if (!style) return null
-  const m = measureText(unit.node, style, column)
+  const m = measureText(unit.node, style, unit.inset ? { ...column, width: column.width - unit.inset } : column)
   return m && { height: m.height, splitCandidates: unit.kind === "splittable" && m.splits.length > 0 ? m.splits : null }
 }
 

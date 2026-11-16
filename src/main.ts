@@ -2,7 +2,8 @@ import { EditorState } from "prosemirror-state"
 import type { Transaction } from "prosemirror-state"
 import { EditorView } from "prosemirror-view"
 import { keymap } from "prosemirror-keymap"
-import { columnResizing, goToNextCell, tableEditing } from "prosemirror-tables"
+import { columnResizing, tableEditing } from "prosemirror-tables"
+import { listInputRules, listKeymap } from "./lists"
 import { TableView } from "./tables"
 import { baseKeymap } from "prosemirror-commands"
 import { history, undo, redo } from "prosemirror-history"
@@ -25,9 +26,9 @@ import "./styles.css"
 // Paragraphs and headings are measured with Pretext; ?measure=dom reads them from the DOM instead.
 const params = new URLSearchParams(location.search)
 const measurer: MeasurerKind = params.get("measure") === "dom" ? "dom" : "pretext"
-// ?lang=hi|hi-unicode|mixed|ml|kn|table loads the seed document in Hindi (Kruti
+// ?lang=hi|hi-unicode|mixed|ml|kn|table|list loads the seed document in Hindi (Kruti
 // Dev or Unicode), English mixed with Kruti Dev, Malayalam (Gayathri) or
-// Kannada, or English with tables; English otherwise.
+// Kannada, or English with tables or lists; English otherwise.
 const langParam = params.get("lang") ?? ""
 const lang: Language = langParam in LANGUAGES ? (langParam as Language) : "en"
 
@@ -65,7 +66,8 @@ const view = new EditorView(paperHost, {
         "Mod-Enter": insertPageBreak,
         "Shift-Enter": insertHardBreak,
       }),
-      keymap({ Tab: goToNextCell(1), "Shift-Tab": goToNextCell(-1) }),
+      listKeymap(),
+      listInputRules(),
       keymap(baseKeymap),
       columnResizing({ View: TableView }),
       tableEditing(),

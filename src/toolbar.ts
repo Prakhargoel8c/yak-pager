@@ -17,6 +17,7 @@ import { FONTS, fontKeyOf, isFontKey } from "./fonts"
 import type { FontKey } from "./fonts"
 import { buildMarginsControl } from "./marginsControl"
 import { insertTable } from "./tables"
+import { toggleList } from "./lists"
 
 const { strong, em, fontSize, fontFamily } = schema.marks
 
@@ -240,7 +241,19 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
   tableBtn.className = "insert-table"
   tableBtn.onclick = run(insertTable())
 
-  mount.append(strongBtn, emBtn, fontSel, sizeSel, blockSel, alignSel, margins.el, pbBtn, tableBtn, hint)
+  const bulletBtn = document.createElement("button")
+  bulletBtn.textContent = "• List"
+  bulletBtn.title = "Bullet list (type \"- \")"
+  bulletBtn.className = "bullet-list"
+  bulletBtn.onclick = run(toggleList(schema.nodes.bulletList))
+
+  const orderedBtn = document.createElement("button")
+  orderedBtn.textContent = "1. List"
+  orderedBtn.title = "Numbered list (type \"1. \")"
+  orderedBtn.className = "ordered-list"
+  orderedBtn.onclick = run(toggleList(schema.nodes.orderedList))
+
+  mount.append(strongBtn, emBtn, fontSel, sizeSel, blockSel, alignSel, margins.el, pbBtn, tableBtn, bulletBtn, orderedBtn, hint)
 
   const sync = () => {
     const { state } = view

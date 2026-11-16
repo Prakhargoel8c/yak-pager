@@ -27,6 +27,9 @@ export function blockStyle(node: PMNode): BlockStyle | null {
   return null
 }
 
+/** Lists add no height of their own: an item is its blocks, indented a whole number of px per level. */
+export const LIST = { indent: 24 }
+
 /**
  * Table geometry. Borders are separate (no collapsing): every cell draws its
  * right and bottom border, first-column cells also their left, and the
@@ -68,7 +71,11 @@ ${scope} table { border-collapse: separate; border-spacing: 0; table-layout: fix
 ${scope} td, ${scope} th { box-sizing: border-box; padding: ${TABLE.padY}px ${TABLE.padX}px; border: 0 solid ${TABLE.line}; border-width: 0 ${TABLE.border}px ${TABLE.border}px 0; vertical-align: top; text-align: start; font-weight: 400; position: relative; }
 ${scope} th { font-weight: 700; background: ${TABLE.head}; }
 ${scope} tr > :first-child { border-left-width: ${TABLE.border}px; }
-${scope} td > *, ${scope} th > * { margin: 0; padding: 0; }
+${scope} ul, ${scope} ol { margin: 0; padding: 0 0 0 ${LIST.indent}px; }
+${scope} li, ${scope} li > * { margin: 0; }
+${scope} li { padding: 0; }
+${scope} .li-continued { list-style-type: none; }
+${scope} td > *, ${scope} th > * { margin: 0; padding-top: 0; padding-bottom: 0; }
 ${scope} .page-gap + tr > *, ${scope} .table-continued tr:first-child > * { box-shadow: inset 0 ${TABLE.border}px 0 ${TABLE.line}; }
 ${scope} .table-continued table { border-top-width: 0; }
 ${scope} .table-continues { padding-bottom: 0; }

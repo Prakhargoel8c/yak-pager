@@ -59,7 +59,10 @@ try {
         d.truth = {}
         for (const s of d.dom.splitCandidates ?? []) {
           if (!pretext.has(s.pos) || Math.abs(pretext.get(s.pos) - s.height) < 0.5) continue
-          const clone = view.nodeDOM(d.offset).cloneNode(true)
+          const original = view.nodeDOM(d.offset)
+          const clone = original.cloneNode(true)
+          // A paragraph in a list is laid out at its level's width.
+          clone.style.width = `${original.getBoundingClientRect().width}px`
           clone.querySelectorAll(".page-gap").forEach((g) => g.remove())
           clone.style.marginTop = ""
           host.replaceChildren(clone)
@@ -399,7 +402,7 @@ try {
     ["wide", { top: 1, right: 2, bottom: 1, left: 2 }],
     ["edit", { top: 0.6, right: 0.5, bottom: 1.4, left: 1.25 }],
   ]
-  for (const lang of ["", "?lang=hi", "?lang=mixed", "?lang=ml", "?lang=table"]) {
+  for (const lang of ["", "?lang=hi", "?lang=mixed", "?lang=ml", "?lang=table", "?lang=list"]) {
     await open(lang)
     for (const [preset, m] of MARGINS) {
       await page.select(".margins-select", preset)
@@ -599,6 +602,192 @@ try {
   }
   await sleep(400)
   await tableLayout("Kruti Dev table at a page edge")
+
+  // Lists: every paragraph of every item is measured at its level's width
+  // (the column less LIST.indent per level) and splits at line boundaries,
+  // so the report above must find 0 disagreements at every level; every gap
+  // must land the next page's first line, and no line may leave its page.
+  const listLayout = async (label) => {
+    const r = await page.evaluate(() => {
+      const { view, layout, geometry } = window.__pager
+      const origin = view.dom.getBoundingClientRect().top
+      const starts = layout.pages.map((p) => p.start)
+      const out = []
+      const levels = {}
+      for (const p of view.dom.querySelectorAll("li p")) {
+        let n = 0
+        for (let el = p; el !== view.dom; el = el.parentElement) if (el.tagName === "UL" || el.tagName === "OL") n++
+        levels[n] = (levels[n] ?? 0) + 1
+      }
+      layout.breaks.forEach((b, i) => {
+        const gap = view.dom.querySelector(`.page-gap[data-page="${i}"]`)
+        if (!gap) return void out.push(`gap ${i} missing`)
+        const d = gap.getBoundingClientRect().bottom - origin - starts[i + 1]
+        if (Math.abs(d) > 0.5) out.push(`gap ${i} off by ${d.toFixed(2)}`)
+      })
+      const range = document.createRange()
+      const walker = document.createTreeWalker(view.dom, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => (n.parentElement.closest(".page-gap") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+      })
+      while (walker.nextNode()) {
+        range.selectNodeContents(walker.currentNode)
+        for (const rr of range.getClientRects()) {
+          if (rr.height === 0) continue
+          const k = starts.findLastIndex((s) => s <= rr.top - origin + 0.5)
+          if (k < 0 || rr.bottom - origin > starts[k] + geometry.contentH + 0.5) out.push(`text outside a page: ${walker.currentNode.data.slice(0, 20)}`)
+        }
+      }
+      // Breaks inside a paragraph, by how many lists enclose it.
+      const splits = {}
+      for (const b of layout.breaks) {
+        const $p = view.state.doc.resolve(b.pos)
+        if ($p.parent.type.name !== "paragraph") continue
+        let n = 0
+        for (let d = 1; d <= $p.depth; d++) if (/List$/.test($p.node(d).type.name)) n++
+        splits[n] = (splits[n] ?? 0) + 1
+      }
+      return { levels, splits, breaks: layout.breaks.map((b) => b.pos), out }
+    })
+    check(r.out.length === 0, `${label}: gaps land on the next page, no line leaves its page`, r.out.slice(0, 4).join("; "))
+    return r
+  }
+  const rerun = async () => {
+    const before = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
+    await page.evaluate(() => document.querySelector(".panel-buttons button").click())
+    await sleep(500)
+    const after = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
+    return { before, after, same: JSON.stringify(before) === JSON.stringify(after) }
+  }
+
+  console.log("— Nested lists")
+  await open("?lang=list")
+  await report("nested lists")
+  const listed = await listLayout("nested lists")
+  check(Object.keys(listed.levels).length >= 4, "list paragraphs at every level, 1 to 4", JSON.stringify(listed.levels))
+  check(Object.keys(listed.splits).some((n) => n >= 3), "a paragraph three or more levels deep splits across a page edge", `inline breaks by level ${JSON.stringify(listed.splits)}`)
+  for (const preset of ["narrow", "moderate", "wide"]) {
+    await page.select(".margins-select", preset)
+    await sleep(400)
+    await report(`nested lists, ${preset} margins`)
+    await listLayout(`nested lists, ${preset} margins`)
+  }
+  await page.select(".margins-select", "normal")
+  await sleep(400)
+
+  // Type at the end of the deepest paragraph that straddles a page edge.
+  const deepSplit = await page.evaluate(() => {
+    const { view, layout } = window.__pager
+    let best = null
+    for (const b of layout.breaks) {
+      const $p = view.state.doc.resolve(b.pos)
+      if ($p.parent.type.name !== "paragraph") continue
+      if (!best || $p.depth > best.depth) best = { depth: $p.depth, end: $p.end() }
+    }
+    return best
+  })
+  await select(deepSplit.end)
+  await page.keyboard.type(" Typed into a nested item that straddles a page edge, long enough to carry another line or two onto the next page.")
+  await sleep(600)
+  await report("after typing into a nested item")
+  await listLayout("after typing into a nested item")
+  const typedRerun = await rerun()
+  check(typedRerun.same, "after typing into a nested item, the breaks match a full re-run", JSON.stringify(typedRerun))
+
+  // Tab sinks an item a level, Shift-Tab lifts it back.
+  const sinkable = await page.evaluate(() => {
+    let at = null
+    window.__pager.view.state.doc.descendants((n, pos, parent, index) => {
+      if (at === null && n.type.name === "listItem" && index > 0 && n.firstChild.textContent.length > 200) at = pos + 2
+    })
+    return at
+  })
+  const original = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
+  await select(sinkable)
+  await page.keyboard.press("Tab")
+  await sleep(500)
+  const sunk = await page.evaluate((at) => {
+    const $p = window.__pager.view.state.doc.resolve(at)
+    let n = 0
+    for (let d = 1; d <= $p.depth; d++) if (/List$/.test($p.node(d).type.name)) n++
+    return n
+  }, sinkable)
+  check(sunk >= 2, "Tab sinks the item a level", `${sunk} lists around it`)
+  await report("after Tab")
+  await listLayout("after Tab")
+  check((await rerun()).same, "after Tab, the breaks match a full re-run")
+  await page.keyboard.down("Shift")
+  await page.keyboard.press("Tab")
+  await page.keyboard.up("Shift")
+  await sleep(500)
+  await report("after Shift-Tab")
+  await listLayout("after Shift-Tab")
+  const lifted = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
+  check(JSON.stringify(lifted) === JSON.stringify(original), "Shift-Tab restores the original breaks", `${JSON.stringify(original)} → ${JSON.stringify(lifted)}`)
+
+  console.log("— print preview of the nested lists")
+  await open("?lang=list")
+  await page.$eval(".preview-c", (el) => el.click())
+  await page.waitForSelector("#print-modal:not(.pm-loading)")
+  const printedList = await page.evaluate(async () => {
+    const { view, layout } = window.__pager
+    const frame = document.querySelector(".pm-frame").contentDocument
+    await frame.fonts.ready
+    const sheets = [...frame.querySelectorAll(".sheet")]
+    const bounds = [0, ...layout.breaks.map((b) => b.pos), view.state.doc.content.size]
+    const depth = (el, root) => {
+      let n = 0
+      for (; el && el !== root; el = el.parentElement) if (el.tagName === "UL" || el.tagName === "OL") n++
+      return n
+    }
+    // Item numbers in document order: on screen every numbered item; in
+    // print every item but the continuation of one cut in two.
+    const number = (li) => li.parentElement.start + [...li.parentElement.children].filter((c) => c.tagName === "LI").indexOf(li)
+    const screenNumbers = [...view.dom.querySelectorAll("ol > li")].map(number)
+    const printNumbers = [...frame.querySelectorAll(".sheet ol > li:not(.li-continued)")].map(number)
+    const wrongNumber = screenNumbers.flatMap((n, i) => (printNumbers[i] === n ? [] : [`item ${i}: printed ${printNumbers[i]}, on screen ${n}`]))
+    // Paragraph nesting levels in document order; a paragraph split across
+    // pages prints once per page.
+    const screenDepths = [...view.dom.querySelectorAll("p")].flatMap((p) => Array(1 + p.querySelectorAll(".page-gap").length).fill(depth(p, view.dom)))
+    const printDepths = [...frame.querySelectorAll(".sheet p")].map((p) => depth(p, p.closest(".sheet")))
+    const wrongDepth = screenDepths.flatMap((d, i) => (printDepths[i] === d ? [] : [`paragraph ${i}: printed ${printDepths[i]} deep, on screen ${d}`]))
+    if (screenNumbers.length !== printNumbers.length) wrongNumber.push(`${printNumbers.length} printed numbers, ${screenNumbers.length} on screen`)
+    if (screenDepths.length !== printDepths.length) wrongDepth.push(`${printDepths.length} printed paragraphs, ${screenDepths.length} on screen`)
+    const continuedItems = frame.querySelectorAll(".li-continued").length
+    const numbered = printNumbers.length
+    const mismatch = [], outside = []
+    sheets.forEach((sheet, k) => {
+      const text = [...sheet.children].filter((el) => !el.classList.contains("page-num")).map((el) => el.textContent).join("")
+      if (text !== view.state.doc.textBetween(bounds[k], bounds[k + 1], "", "")) mismatch.push(k + 1)
+      const cs = getComputedStyle(sheet)
+      const r = sheet.getBoundingClientRect()
+      const top = r.top + parseFloat(cs.paddingTop), bottom = r.bottom - parseFloat(cs.paddingBottom)
+      const walker = frame.createTreeWalker(sheet, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement.closest(".page-num") ? 2 : 1) })
+      const range = frame.createRange()
+      while (walker.nextNode()) {
+        range.selectNodeContents(walker.currentNode)
+        for (const rr of range.getClientRects()) if (rr.height > 0 && (rr.top < top - 0.5 || rr.bottom > bottom + 0.5)) outside.push(`sheet ${k + 1}`)
+      }
+    })
+    return { sheets: sheets.length, pages: layout.pages.length, mismatch, wrongNumber, wrongDepth, outside, numbered, continuedItems, depths: printDepths.length }
+  })
+  await page.keyboard.press("Escape")
+  check(printedList.sheets === printedList.pages, "one printed sheet per layout page", `${printedList.sheets} sheets, ${printedList.pages} pages`)
+  check(printedList.mismatch.length === 0, "every sheet holds the text between the editor's breaks", `mismatch on sheets ${printedList.mismatch.join(", ")}`)
+  check(printedList.numbered > 0 && printedList.wrongNumber.length === 0, `${printedList.numbered} printed items carry their on-screen numbers, in order (${printedList.continuedItems} continued items unnumbered)`, printedList.wrongNumber.slice(0, 3).join("; "))
+  check(printedList.wrongDepth.length === 0, `${printedList.depths} printed paragraphs each at its on-screen nesting level`, printedList.wrongDepth.slice(0, 3).join("; "))
+  check(printedList.outside.length === 0, "every printed line sits inside its sheet's writable area", printedList.outside.slice(0, 3).join("; "))
+
+  console.log("— the nested list in the Kruti Dev document")
+  await open("?lang=hi")
+  await report("Kruti Dev with a nested list")
+  const krutiList = await listLayout("Kruti Dev with a nested list")
+  check(Object.keys(krutiList.levels).length >= 3, "Kruti Dev list paragraphs at three levels", JSON.stringify(krutiList.levels))
+  for (const preset of ["narrow", "wide"]) {
+    await page.select(".margins-select", preset)
+    await sleep(400)
+    await report(`Kruti Dev nested list, ${preset} margins`)
+    await listLayout(`Kruti Dev nested list, ${preset} margins`)
+  }
 } finally {
   await browser.close()
   try { process.kill(-server.pid) } catch {}

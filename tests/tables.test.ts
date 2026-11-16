@@ -74,7 +74,7 @@ describe("table units", () => {
     t.forEach((_, offset) => rows.push(tablePos + 1 + offset))
     expect(u[1].pos).toBe(tablePos)
     expect(u.slice(2, 4).map((x) => x.pos)).toEqual(rows.slice(1))
-    expect(u.slice(1, 4).map((x) => x.row!.pos)).toEqual(rows)
+    expect(u.slice(1, 4).map((x) => x.at)).toEqual(rows)
     expect(u[3].end).toBe(tablePos + t.nodeSize)
     expect(u.slice(1, 4).map((x) => x.kind)).toEqual(["atomic", "atomic", "atomic"])
   })
@@ -110,7 +110,7 @@ describe("paginating table rows", () => {
     const { layout } = run(d)
     // 700 + (40 + 1) + 100 = 841 fits in 864; the next row (100) does not.
     const thirdRow = units(d)[3]
-    expect(layout.breaks).toEqual([{ pos: thirdRow.row!.pos, remaining: 864 - 841 }])
+    expect(layout.breaks).toEqual([{ pos: thirdRow.at, remaining: 864 - 841 }])
     expect(d.resolve(layout.breaks[0].pos).parent.type).toBe(table)
     expect(layout.pages.map((pg) => pg.fill)).toEqual([841, 100 + 30 + TABLE.tail])
     expect(layout.pages[1].opening).toBe("between")
@@ -136,7 +136,7 @@ describe("cutting a table between rows", () => {
     expect(pages[0][1].node.type).toBe(table)
     expect(pages[0][1].continued).toBe(true)
     expect(pages[1][0].node.type).toBe(table)
-    expect(pages[1][0].continuation).toBe(true)
+    expect(pages[1][0].continuation).toBe(1)
     expect(pages[1][0].continued).toBe(false)
   })
 
@@ -145,6 +145,6 @@ describe("cutting a table between rows", () => {
     const d = doc.create(null, [p("x"), t])
     const pages = cutPages(d, [{ pos: 3, remaining: 0 }])
     expect(pages.map((pg) => pg.map((x) => x.node.textContent))).toEqual([["x"], ["h1h2ab"]])
-    expect(pages[1][0].continuation).toBe(false)
+    expect(pages[1][0].continuation).toBe(0)
   })
 })

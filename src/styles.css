@@ -187,7 +187,7 @@ body {
 .page-gap .gap-rule {
   position: absolute;
   top: var(--push, 0px);
-  left: calc(-1 * var(--margin-left));
+  left: calc(-1 * var(--margin-left) - var(--inset, 0px));
   right: calc(-1 * var(--margin-right));
   border-top: 1px dashed rgba(26, 115, 232, 0.45);
 }
@@ -195,7 +195,7 @@ body {
   position: absolute;
   top: var(--push, 0px);
   height: var(--margin-bottom); /* the bottom margin of the sheet above */
-  left: calc(-1 * var(--margin-left));
+  left: calc(-1 * var(--margin-left) - var(--inset, 0px));
   right: calc(-1 * var(--margin-right));
   display: flex;
   align-items: center;

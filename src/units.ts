@@ -6,32 +6,41 @@
  *   atomic      moves whole (a heading, a rule, a table row)
  *   forced      ends its page after itself (an explicit page break)
  *
- * A table is placed row by row, so a page may end between two rows but
- * never inside one. The first row's unit starts at the table, so a break
- * before it falls before the table; the table's top border and the space
- * below it are the first and last rows' `extra`. A table with a rowspan
- * moves whole.
+ * Lists are walked into: every block of every item is a unit of its own,
+ * indented LIST.indent per level, so a paragraph deep in a list still splits
+ * at a line boundary. A block that is the first content of its item (and of
+ * its list) starts its unit where that item or list starts, so a break
+ * before it falls before the item, never between an item and its marker.
+ *
+ * A top-level table is placed row by row, so a page may end between two rows
+ * but never inside one; its first row's unit starts at the table, and the
+ * table's top border and the space below it are the first and last rows'
+ * `extra`. A table with a rowspan, or one inside a list, moves whole.
  *
  * The pass, the Pretext/DOM comparison and the print cutter all walk the
  * document through here.
  */
 import type { Node as PMNode } from "prosemirror-model"
 import type { EditorView } from "prosemirror-view"
-import { TABLE } from "./typography"
+import { LIST, TABLE } from "./typography"
 
 export type UnitKind = "splittable" | "atomic" | "forced"
 
 export interface Unit {
   node: PMNode
-  /** Doc position of the unit's start. */
+  /** Doc position of the unit's start: the node's, or an enclosing item's, list's or table's it opens. */
   pos: number
+  /** Doc position of the node itself. */
+  at: number
   /** Doc position just after the unit. */
   end: number
   /** Doc position of the unit's first content; split candidates are relative to it. */
   contentStart: number
   kind: UnitKind
-  /** For a table row: its table, index and own position. */
-  row?: { table: PMNode; index: number; pos: number }
+  /** How far the unit is indented from the column, in px (list levels). */
+  inset: number
+  /** For a table row: its table and index. */
+  row?: { table: PMNode; index: number }
   /** Height the unit has beyond its node's own box (a table's border and tail). */
   extra: number
 }
@@ -42,35 +51,61 @@ export function unitKind(node: PMNode): UnitKind {
   return "atomic"
 }
 
+export const isList = (node: PMNode) => node.type.name === "bulletList" || node.type.name === "orderedList"
+
 const hasRowspan = (table: PMNode) => {
   let found = false
   table.forEach((row) => row.forEach((cell) => (found ||= cell.attrs.rowspan > 1)))
   return found
 }
 
-export function units(doc: PMNode): Unit[] {
-  const out: Unit[] = []
-  doc.forEach((node, pos) => {
-    if (node.type.name !== "table" || hasRowspan(node)) {
-      out.push({ node, pos, end: pos + node.nodeSize, contentStart: pos + 1, kind: unitKind(node), extra: 0 })
+/** The blocks of `parent` (content at `start`), the first opening at `lead` when given. */
+function walk(parent: PMNode, start: number, inset: number, lead: number | null, out: Unit[]) {
+  parent.forEach((node, offset, index) => {
+    const at = start + offset
+    const pos = index === 0 && lead != null ? lead : at
+    if (isList(node)) {
+      node.forEach((item, itemOffset, itemIndex) => {
+        const itemAt = at + 1 + itemOffset
+        walk(item, itemAt + 1, inset + LIST.indent, itemIndex === 0 ? pos : itemAt, out)
+      })
       return
     }
-    const last = node.childCount - 1
-    node.forEach((row, offset, index) => {
-      const at = pos + 1 + offset
-      out.push({
-        node: row,
-        pos: index === 0 ? pos : at,
-        end: index === last ? pos + node.nodeSize : at + row.nodeSize,
-        contentStart: at + 1,
-        kind: "atomic",
-        row: { table: node, index, pos: at },
-        extra: (index === 0 ? TABLE.border : 0) + (index === last ? TABLE.tail : 0),
+    if (node.type.name === "table" && inset === 0 && !hasRowspan(node)) {
+      const last = node.childCount - 1
+      node.forEach((row, rowOffset, i) => {
+        const rowAt = at + 1 + rowOffset
+        out.push({
+          node: row,
+          pos: i === 0 ? pos : rowAt,
+          at: rowAt,
+          end: i === last ? at + node.nodeSize : rowAt + row.nodeSize,
+          contentStart: rowAt + 1,
+          kind: "atomic",
+          inset,
+          row: { table: node, index: i },
+          extra: (i === 0 ? TABLE.border : 0) + (i === last ? TABLE.tail : 0),
+        })
       })
-    })
+      return
+    }
+    out.push({ node, pos, at, end: at + node.nodeSize, contentStart: at + 1, kind: unitKind(node), inset, extra: 0 })
   })
+}
+
+export function units(doc: PMNode): Unit[] {
+  const out: Unit[] = []
+  walk(doc, 0, 0, null, out)
   return out
 }
 
+/** How far content at a doc position is indented: one LIST.indent per enclosing list. */
+export function insetAt(doc: PMNode, pos: number): number {
+  const $pos = doc.resolve(pos)
+  let lists = 0
+  for (let d = 1; d <= $pos.depth; d++) if (isList($pos.node(d))) lists++
+  return lists * LIST.indent
+}
+
 /** The unit's rendered element: a row's <tr>, else the block. */
-export const unitDOM = (view: EditorView, unit: Unit) => view.nodeDOM(unit.row?.pos ?? unit.pos) as HTMLElement | null
+export const unitDOM = (view: EditorView, unit: Unit) => view.nodeDOM(unit.at) as HTMLElement | null

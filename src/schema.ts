@@ -146,6 +146,35 @@ const pmTables = tableNodes({ tableGroup: "block", cellContent: "block+", cellAt
 const table = { ...pmTables.table, content: "tableRow+", toDOM: tableToDOM }
 const tableRow = { ...pmTables.table_row, content: "(tableCell | tableHeader)*" }
 
+/** TipTap's list shape: bulletList | orderedList (start) > listItem > paragraph block*. */
+const bulletList = {
+  content: "listItem+",
+  group: "block list",
+  parseDOM: [{ tag: "ul" }],
+  toDOM: (): DOMOutputSpec => ["ul", 0],
+}
+const orderedList = {
+  attrs: { start: { default: 1 } },
+  content: "listItem+",
+  group: "block list",
+  parseDOM: [
+    {
+      tag: "ol",
+      getAttrs: (dom: string | HTMLElement) => {
+        const start = (dom as HTMLElement).getAttribute("start")
+        return { start: start ? parseInt(start, 10) : 1 }
+      },
+    },
+  ],
+  toDOM: (node: Node): DOMOutputSpec => ["ol", node.attrs.start === 1 ? {} : { start: node.attrs.start }, 0],
+}
+const listItem = {
+  content: "paragraph block*",
+  defining: true,
+  parseDOM: [{ tag: "li" }],
+  toDOM: (): DOMOutputSpec => ["li", 0],
+}
+
 export const schema = new Schema({
   nodes: {
     doc,
@@ -159,6 +188,9 @@ export const schema = new Schema({
     tableRow,
     tableCell: pmTables.table_cell,
     tableHeader: pmTables.table_header,
+    bulletList,
+    orderedList,
+    listItem,
   },
   marks: { strong, em, fontSize, fontFamily },
 })

@@ -71,9 +71,9 @@ export function compareWithDom(view: EditorView): { compared: number; diffs: Mea
     if (!p) return
     compared++
     const d = dom.measure(unit)!
-    if (unit.row) rows.push({ pos: unit.row.pos, dom: d.height, pretext: p.height })
+    if (unit.row) rows.push({ pos: unit.at, dom: d.height, pretext: p.height })
     if (Math.abs(d.height - p.height) >= 0.5 || !sameSplits(d.splitCandidates, p.splitCandidates)) {
-      diffs.push({ index, offset: unit.pos, type: unit.node.type.name, text: unit.node.textContent.slice(0, 80), dom: d, pretext: p })
+      diffs.push({ index, offset: unit.at, type: unit.node.type.name, text: unit.node.textContent.slice(0, 80), dom: d, pretext: p })
     }
   })
   return { compared, diffs, rows }

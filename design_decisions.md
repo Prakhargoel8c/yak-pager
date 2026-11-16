@@ -131,6 +131,22 @@ Grid predicts as well as a fixed table and takes a gap just as cleanly, so the c
 
 ---
 
+# 7. Lists are walked into, not placed whole
+
+The schema follows TipTap's list extensions: `bulletList` and `orderedList` (attr `start`) hold `listItem`s, whose content is `paragraph block*`. Editing is `prosemirror-schema-list`: Enter splits an item, Tab and Shift-Tab sink and lift it (in a table cell they still move between cells), `- ` and `1. ` start a list, and the toolbar's two list buttons wrap, switch or lift. `?lang=list` is the English seed as lists four levels deep; the Kruti Dev document carries a three-level list.
+
+**Every block in a list is a unit.** `units.ts` walks into lists, so a paragraph four levels deep is a splittable unit like any other: Pretext measures it at the column width less `LIST.indent` (24px, a whole number like the table columns) per level, and it breaks at a line boundary. A list adds no height of its own: lists, items and the blocks in them have no margins (`typography.ts`), the marker sits outside in the indent, and the space between items is the paragraphs' own bottom padding. A block that is an item's first content starts its unit at the item, and an item's list's first at the list, so a break before it falls before the item (or list): an item is never separated from its marker. The pass re-measures a block whose indent changed even when its node didn't (sinking an item can keep the paragraph's node).
+
+The gap widget is the same pooled element, wherever the break falls: between items it is a block inside the `<ul>`/`<ol>`, inside a paragraph it is the float. Its page rule and number reach back out to the sheet's edges by `--inset`, set from the number of lists around the break.
+
+**Print** slices the document between breaks (`doc.slice`, with parents), so every list, item and paragraph a cut runs through is closed on one page and reopened on the next at the same depth. A reopened ordered list gets `start` = its start + the index of its first item there; an item cut in two hides its marker on the second page (`li-continued`), so numbers carry on and are never repeated.
+
+**Lists in table cells** make that row fall back to the DOM measurer (cells are measured block by block, and a list isn't modeled there). **Tables in list items** move whole, measured from the DOM.
+
+**Open:** a list nested in a table cell isn't Pretext-measured; a heading or rule in an item is atomic like at top level.
+
+---
+
 # Open Questions
 
 ## How to split paragraphs

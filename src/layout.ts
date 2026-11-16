@@ -207,6 +207,12 @@ export function makeGapRowDOM(pageIdx: number): HTMLElement {
   return el
 }
 
+/** How far the widget sits inside a list: its visuals reach back out to the sheet's edges. */
+export function setGapInset(widgetEl: HTMLElement, inset: number) {
+  const v = `${inset}px`
+  if (widgetEl.style.getPropertyValue("--inset") !== v) widgetEl.style.setProperty("--inset", v)
+}
+
 export function setGapColspan(row: HTMLElement, span: number) {
   const cell = row.firstChild as HTMLTableCellElement
   if (cell.colSpan !== span) cell.colSpan = span

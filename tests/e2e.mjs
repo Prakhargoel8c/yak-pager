@@ -521,6 +521,49 @@ if ((await rowBreak()) >= 0) {
   })
 }
 
+const nestedItem = await page.evaluate(() => {
+  let at = null
+  window.__pager.view.state.doc.descendants((n, pos, parent, index) => {
+    if (at === null && n.type.name === "listItem" && index > 0 && n.firstChild.textContent.length > 100) at = pos + 2
+  })
+  return at
+})
+if (nestedItem != null) {
+  console.log("— lists: Tab and Shift-Tab re-paginate")
+  // Sinking an item narrows every line of it by one indent, so its lines
+  // re-wrap and the breaks below move: the reflow only reuses widgets.
+  await page.evaluate((at) => {
+    const { view } = window.__pager
+    view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, at)))
+    view.focus()
+  }, nestedItem)
+  const before = await page.evaluate(() => ({ pass: window.__pager.reflows.at(-1)?.pass ?? 0, breaks: window.__pager.layout.breaks.map((b) => b.pos) }))
+  await page.keyboard.press("Tab")
+  await sleep(500)
+  const sunk = await page.evaluate(() => window.__pager.layout.breaks.map((b) => [b.pos, b.remaining]))
+  await page.evaluate(() => document.querySelector(".panel-buttons button").click())
+  await sleep(500)
+  const sunkRerun = await page.evaluate(() => window.__pager.layout.breaks.map((b) => [b.pos, b.remaining]))
+  await page.keyboard.down("Shift")
+  await page.keyboard.press("Tab")
+  await page.keyboard.up("Shift")
+  await sleep(500)
+  const listOps = await page.evaluate((after) => {
+    const sum = {}
+    for (const r of window.__pager.reflows.filter((r) => r.pass > after)) {
+      for (const [key, n] of Object.entries(r.counts)) sum[key] = (sum[key] ?? 0) + n
+    }
+    return sum
+  }, before.pass)
+  const lifted = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
+  ok(JSON.stringify(sunk) === JSON.stringify(sunkRerun), "after Tab, the layout matches a full re-run", `pass ${JSON.stringify(sunk)} rerun ${JSON.stringify(sunkRerun)}`)
+  ok(JSON.stringify(lifted) === JSON.stringify(before.breaks), "Shift-Tab put them back")
+  ok((listOps.other ?? 0) === 0 && (listOps.create ?? 0) + (listOps.remove ?? 0) === 0, "indenting a list item: the reflow only reused widgets", JSON.stringify(listOps))
+  ;(await readLanding()).forEach((l, i) => {
+    ok(l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5, `list layout: widget ${i} ends at page ${i + 2} content start`, l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`)
+  })
+}
+
 console.log("— doc.toJSON() carries no page nodes")
 const docDumped = await page.evaluate(() => {
   ;[...document.querySelectorAll(".panel-buttons button")][1].click()

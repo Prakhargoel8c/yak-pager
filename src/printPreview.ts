@@ -32,6 +32,7 @@ import type { PageGeometry } from "./layout"
 import { paginationKey } from "./paginationPlugin"
 import { docFont } from "./toolbar"
 import { typographyCSS } from "./typography"
+import { isList } from "./units"
 
 /** Paper size as a CSS @page value, derived from the live geometry. */
 const PAGE_SIZE = `${SHEET_W / PX_PER_IN}in ${SHEET_H / PX_PER_IN}in`
@@ -140,12 +141,22 @@ function renderPages(view: EditorView): HTMLElement[][] {
       // On screen, the line before a gap widget is an interior line, so
       // justify keeps it flush. In the print document the same line is the
       // LAST line of a real paragraph, which browsers leave ragged unless
-      // told otherwise.
-      if (piece.continued && piece.node.attrs.align === "justify") el.style.setProperty("text-align-last", "justify")
+      // told otherwise. In a list, that paragraph is the last item's last.
+      if (piece.continued) {
+        let [node, dom] = [piece.node, el]
+        while (isList(node) || node.type.name === "listItem") [node, dom] = [node.lastChild!, dom.lastElementChild as HTMLElement]
+        if (node.attrs.align === "justify") dom.style.setProperty("text-align-last", "justify")
+      }
       // A table cut between rows: as on screen, the space below it is on its
       // last page only, and its top border on its first.
       if (piece.continued && piece.node.type.name === "table") el.classList.add("table-continues")
-      if (piece.continuation) el.classList.add("table-continued")
+      if (piece.continuation && piece.node.type.name === "table") el.classList.add("table-continued")
+      // An item cut in two keeps its marker on the page where it starts.
+      let [node, dom, depth] = [piece.node, el, 1]
+      while (depth < piece.continuation && (isList(node) || node.type.name === "listItem")) {
+        if (node.type.name === "listItem") dom.classList.add("li-continued")
+        ;[node, dom, depth] = [node.firstChild!, dom.firstElementChild as HTMLElement, depth + 1]
+      }
       return el
     })
   )

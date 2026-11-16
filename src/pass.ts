@@ -55,8 +55,8 @@ export function runPass({ doc, geometry, measurers, dirty, full, cache }: PassIn
   for (const u of all) {
     const inDirty = dirty != null && u.pos < dirty.to && u.end > dirty.from
     let m = cache.get(u.node)
-    if (full || m === undefined || inDirty) {
-      m = measure(measurers, u)
+    if (full || m === undefined || inDirty || m.inset !== u.inset) {
+      m = { ...measure(measurers, u), inset: u.inset }
       cache.set(u.node, m)
       measured++
     }

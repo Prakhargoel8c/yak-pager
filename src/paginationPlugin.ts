@@ -29,7 +29,8 @@ import type { EditorView } from "prosemirror-view"
 import type { Node as PMNode } from "prosemirror-model"
 import { startMeter, stopMeter } from "./apiMeter"
 import { TableMap } from "prosemirror-tables"
-import { applyGeometry, emptyLayout, geometryOf, makeGapRowDOM, makeGapWidgetDOM, paintSheets, setGapColspan, setPush } from "./layout"
+import { applyGeometry, emptyLayout, geometryOf, makeGapRowDOM, makeGapWidgetDOM, paintSheets, setGapColspan, setGapInset, setPush } from "./layout"
+import { insetAt } from "./units"
 import type { BreakInfo, Layout } from "./layout"
 import type { MeasuredBlock } from "./measure"
 import { domMeasurer, pretextMeasurer } from "./measurers"
@@ -134,7 +135,7 @@ export function paginationPlugin(
   const rowPool = new Map<number, HTMLElement>()
   let audit: ReflowAudit | null = null
 
-  const takeFromPool = (i: number, columns = 0) => {
+  const takeFromPool = (i: number, columns = 0, inset = 0) => {
     const kind = columns > 0 ? rowPool : pool
     let el = kind.get(i)
     if (!el) {
@@ -151,6 +152,7 @@ export function paginationPlugin(
       el.remove()
     }
     if (columns > 0) setGapColspan(el, columns)
+    setGapInset(el, inset)
     return el
   }
 
@@ -201,8 +203,9 @@ export function paginationPlugin(
           const widgets = meta.layout.breaks.map((b, i) => {
             const parent = tr.doc.resolve(b.pos).parent
             const columns = parent.type.name === "table" ? TableMap.get(parent).width : 0
-            return Decoration.widget(b.pos, () => takeFromPool(i, columns), {
-              key: columns > 0 ? `page-gap-row-${i}-${columns}` : `page-gap-${i}`,
+            const inset = insetAt(tr.doc, b.pos)
+            return Decoration.widget(b.pos, () => takeFromPool(i, columns, inset), {
+              key: columns > 0 ? `page-gap-row-${i}-${columns}` : `page-gap-${i}-${inset}`,
               side: -1,
               marks: [],
             })
