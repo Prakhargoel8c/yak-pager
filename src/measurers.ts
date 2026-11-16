@@ -13,7 +13,7 @@ import { clearCache } from "@chenglou/pretext"
 import { measureBlock } from "./measure"
 import type { MeasuredBlock } from "./measure"
 import { clearInlineBoxes, editorColumn, measureWithPretext } from "./pretextMeasure"
-import { unitDOM, units } from "./units"
+import { units } from "./units"
 import type { Unit } from "./units"
 import type { SplitCandidate } from "./solver"
 
@@ -24,7 +24,7 @@ export interface Measurer {
 
 export function domMeasurer(view: EditorView): Measurer {
   return {
-    measure: (unit) => measureBlock(view, unitDOM(view, unit), unit),
+    measure: (unit) => measureBlock(view, view.nodeDOM(unit.at) as HTMLElement | null, unit),
     invalidate() {},
   }
 }

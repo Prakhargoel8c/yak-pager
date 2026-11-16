@@ -10,7 +10,7 @@
  * without a browser.
  */
 import type { Node as PMNode, ResolvedPos } from "prosemirror-model"
-import type { BreakInfo } from "./layout"
+import type { PageBreak } from "./solver"
 import { units } from "./units"
 
 export interface Piece {
@@ -22,7 +22,7 @@ export interface Piece {
 }
 
 /** Positions a page may start at: unit starts, and line starts inside a paragraph. */
-function validBreaks(doc: PMNode, breaks: BreakInfo[]): number[] {
+function validBreaks(doc: PMNode, breaks: PageBreak[]): number[] {
   const all = units(doc)
   const starts = new Set(all.map((u) => u.pos))
   const ok = (p: number) =>
@@ -39,7 +39,7 @@ function reopen(node: PMNode, $from: ResolvedPos, depth: number, open: number): 
   return node.type.create(attrs, content, node.marks)
 }
 
-export function cutPages(doc: PMNode, breaks: BreakInfo[]): Piece[][] {
+export function cutPages(doc: PMNode, breaks: PageBreak[]): Piece[][] {
   const bounds = [0, ...validBreaks(doc, breaks), doc.content.size]
   const pages: Piece[][] = []
   for (let k = 0; k + 1 < bounds.length; k++) {

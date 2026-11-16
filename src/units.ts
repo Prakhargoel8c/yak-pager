@@ -21,7 +21,7 @@
  * document through here.
  */
 import type { Node as PMNode } from "prosemirror-model"
-import type { EditorView } from "prosemirror-view"
+import { TableMap } from "prosemirror-tables"
 import { LIST, TABLE } from "./typography"
 
 export type UnitKind = "splittable" | "atomic" | "forced"
@@ -45,7 +45,7 @@ export interface Unit {
   extra: number
 }
 
-export function unitKind(node: PMNode): UnitKind {
+function unitKind(node: PMNode): UnitKind {
   if (node.type.name === "pageBreak") return "forced"
   if (node.type.name === "paragraph") return "splittable"
   return "atomic"
@@ -99,13 +99,11 @@ export function units(doc: PMNode): Unit[] {
   return out
 }
 
-/** How far content at a doc position is indented: one LIST.indent per enclosing list. */
-export function insetAt(doc: PMNode, pos: number): number {
+/** What a break at `pos` sits in: the lists around it (one LIST.indent each), and the table's column count when it falls between two rows. */
+export function breakSite(doc: PMNode, pos: number): { inset: number; columns: number } {
   const $pos = doc.resolve(pos)
   let lists = 0
   for (let d = 1; d <= $pos.depth; d++) if (isList($pos.node(d))) lists++
-  return lists * LIST.indent
+  const columns = $pos.parent.type.name === "table" ? TableMap.get($pos.parent).width : 0
+  return { inset: lists * LIST.indent, columns }
 }
-
-/** The unit's rendered element: a row's <tr>, else the block. */
-export const unitDOM = (view: EditorView, unit: Unit) => view.nodeDOM(unit.at) as HTMLElement | null

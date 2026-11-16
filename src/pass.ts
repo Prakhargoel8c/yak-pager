@@ -19,6 +19,9 @@ import type { Block } from "./solver"
 import { units } from "./units"
 import type { Unit } from "./units"
 
+/** Measurements by Node identity, with the inset each was taken at: a block moved into or out of a list is re-measured. */
+export type MeasureCache = WeakMap<PMNode, MeasuredBlock & { inset: number }>
+
 export interface PassInput {
   doc: PMNode
   geometry: PageGeometry
@@ -26,7 +29,7 @@ export interface PassInput {
   dirty: { from: number; to: number } | null
   /** Re-measure everything and drop what the measurers cached. */
   full: boolean
-  cache: WeakMap<PMNode, MeasuredBlock>
+  cache: MeasureCache
 }
 
 export interface PassResult {

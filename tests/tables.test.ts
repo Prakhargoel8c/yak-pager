@@ -6,7 +6,6 @@ import { units } from "../src/units"
 import { cutPages } from "../src/cutter"
 import { runPass } from "../src/pass"
 import { pageGeometry, DEFAULT_MARGINS } from "../src/layout"
-import type { MeasuredBlock } from "../src/measure"
 import type { Measurer } from "../src/measurers"
 import { columnWidths, insertTable, tableColumns } from "../src/tables"
 import { TABLE } from "../src/typography"
@@ -102,7 +101,7 @@ describe("paginating table rows", () => {
     invalidate() {},
   }
   const run = (d: PMNode) =>
-    runPass({ doc: d, geometry, measurers: [fake], dirty: null, full: false, cache: new WeakMap<PMNode, MeasuredBlock>() })
+    runPass({ doc: d, geometry, measurers: [fake], dirty: null, full: false, cache: new WeakMap() })
 
   it("breaks between two rows, never inside one", () => {
     const t = grid([["h1", "h2"], ["a", "b"], ["c", "d"], ["e", "f"]])

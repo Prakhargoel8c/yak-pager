@@ -22,8 +22,6 @@ import type { Unit } from "./units"
 export interface MeasuredBlock {
   height: number
   splitCandidates: SplitCandidate[] | null
-  /** The indent it was measured at (pass.ts): a block moved into or out of a list is re-measured. */
-  inset?: number
 }
 
 /**

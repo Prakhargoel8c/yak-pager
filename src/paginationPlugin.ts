@@ -26,15 +26,13 @@ import { Plugin, PluginKey } from "prosemirror-state"
 import type { Transaction, EditorState } from "prosemirror-state"
 import { Decoration, DecorationSet } from "prosemirror-view"
 import type { EditorView } from "prosemirror-view"
-import type { Node as PMNode } from "prosemirror-model"
 import { startMeter, stopMeter } from "./apiMeter"
-import { TableMap } from "prosemirror-tables"
-import { applyGeometry, emptyLayout, geometryOf, makeGapRowDOM, makeGapWidgetDOM, paintSheets, setGapColspan, setGapInset, setPush } from "./layout"
-import { insetAt } from "./units"
-import type { BreakInfo, Layout } from "./layout"
-import type { MeasuredBlock } from "./measure"
+import { applyGeometry, emptyLayout, geometryOf, makeGapDOM, paintSheets, setGapColspan, setGapVar } from "./layout"
+import { breakSite } from "./units"
+import type { Layout } from "./layout"
 import { domMeasurer, pretextMeasurer } from "./measurers"
 import { runPass } from "./pass"
+import type { MeasureCache } from "./pass"
 import { createReflowAudit } from "./reflowAudit"
 import type { ReflowAudit, ReflowReport } from "./reflowAudit"
 
@@ -135,11 +133,11 @@ export function paginationPlugin(
   const rowPool = new Map<number, HTMLElement>()
   let audit: ReflowAudit | null = null
 
-  const takeFromPool = (i: number, columns = 0, inset = 0) => {
+  const takeFromPool = (i: number, { inset, columns }: { inset: number; columns: number }) => {
     const kind = columns > 0 ? rowPool : pool
     let el = kind.get(i)
     if (!el) {
-      el = columns > 0 ? makeGapRowDOM(i) : makeGapWidgetDOM(i)
+      el = makeGapDOM(i, columns > 0)
       kind.set(i, el)
       audit?.created(el)
     } else {
@@ -152,7 +150,7 @@ export function paginationPlugin(
       el.remove()
     }
     if (columns > 0) setGapColspan(el, columns)
-    setGapInset(el, inset)
+    setGapVar(el, "--inset", inset)
     return el
   }
 
@@ -201,11 +199,9 @@ export function paginationPlugin(
         const meta = tr.getMeta(paginationKey) as LayoutMeta | undefined
         if (meta && meta.type === "layout") {
           const widgets = meta.layout.breaks.map((b, i) => {
-            const parent = tr.doc.resolve(b.pos).parent
-            const columns = parent.type.name === "table" ? TableMap.get(parent).width : 0
-            const inset = insetAt(tr.doc, b.pos)
-            return Decoration.widget(b.pos, () => takeFromPool(i, columns, inset), {
-              key: columns > 0 ? `page-gap-row-${i}-${columns}` : `page-gap-${i}-${inset}`,
+            const site = breakSite(tr.doc, b.pos)
+            return Decoration.widget(b.pos, () => takeFromPool(i, site), {
+              key: site.columns > 0 ? `page-gap-row-${i}-${site.columns}` : `page-gap-${i}-${site.inset}`,
               side: -1,
               marks: [],
             })
@@ -232,9 +228,8 @@ export function paginationPlugin(
       const stack = view.dom.parentElement as HTMLElement
       if (!stack) throw new Error("paginationPlugin: editor must be mounted inside .paper-stack")
 
-      // MEASURE cache — keyed by Node object identity, owned per editor.
-      const cache = new WeakMap<PMNode, MeasuredBlock>()
-      const reflowAudit = createReflowAudit(stack, view.dom)
+      const cache: MeasureCache = new WeakMap()
+      const reflowAudit = createReflowAudit(stack)
       audit = reflowAudit
 
       let queued = false
@@ -286,8 +281,7 @@ export function paginationPlugin(
         // (ignoreMutation), so these writes never trigger DOM
         // reconciliation. Every write is change-checked: a stable layout
         // performs zero DOM operations.
-        syncView(layout.breaks, pool)
-        syncView(layout.breaks, rowPool)
+        for (const p of [pool, rowPool]) layout.breaks.forEach((b, i) => p.has(i) && setGapVar(p.get(i)!, "--push", b.remaining))
         stopMeter()
         const { ops, counts } = reflowAudit.end()
         const t3 = performance.now()
@@ -326,19 +320,5 @@ export function paginationPlugin(
         },
       }
     },
-  })
-}
-
-/**
- * Align the view with the computed layout: point each pooled widget's --push
- * at the fresh `remaining`. The widget's own box height derives from --push
- * in CSS (calc(var(--band) + var(--push))), so this one write IS the push.
- * Writes are change-checked, so an unchanged layout performs zero DOM
- * operations.
- */
-function syncView(breaks: BreakInfo[], pool: Map<number, HTMLElement>) {
-  breaks.forEach((b, i) => {
-    const w = pool.get(i)
-    if (w) setPush(w, b.remaining)
   })
 }

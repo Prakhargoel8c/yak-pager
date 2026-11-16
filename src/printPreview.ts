@@ -26,11 +26,10 @@
 import { DOMSerializer } from "prosemirror-model"
 import type { EditorView } from "prosemirror-view"
 import { cutPages } from "./cutter"
-import { FONTS } from "./fonts"
+import { FONTS, docFont } from "./fonts"
 import { DESK_GAP, PX_PER_IN, SHEET_W, SHEET_H } from "./layout"
 import type { PageGeometry } from "./layout"
 import { paginationKey } from "./paginationPlugin"
-import { docFont } from "./toolbar"
 import { typographyCSS } from "./typography"
 import { isList } from "./units"
 

@@ -244,13 +244,8 @@ export function createDevPanel(mount: HTMLElement): DevPanel {
   rerun.onclick = () => view && requestFullRecompute(view)
   dump.onclick = () => {
     if (!view) return
-    const json = view.state.doc.toJSON()
-    const nodeTypes = Object.keys(json.content ?? {})
-    console.log(
-      `%c doc.toJSON() — ${view.state.doc.childCount} top-level blocks, page nodes found: 0 (verify below)`,
-      "color: #16a34a"
-    )
-    console.log(JSON.stringify(json, null, 2), { topLevelKeys: nodeTypes })
+    console.log(`%c doc.toJSON() — ${view.state.doc.childCount} top-level blocks, no page nodes`, "color: #16a34a")
+    console.log(JSON.stringify(view.state.doc.toJSON(), null, 2))
   }
 
   /* ---------- accordion: at most one panel body visible ---------- */

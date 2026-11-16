@@ -60,7 +60,34 @@ const readStats = () =>
     pages: Number(document.querySelector(".stats .v")?.textContent ?? NaN),
     breaks: [...document.querySelectorAll(".breaks div")].textContent ?? "",
   }))
-const panelText = () => page.evaluate(() => document.querySelector(".panel-card")?.textContent ?? "")
+const lastPass = () => page.evaluate(() => window.__pager.reflows.at(-1)?.pass ?? 0)
+/** DOM operation counts summed over every pass after `pass`: an action of several keystrokes spans several passes. */
+const opsSince = (pass) =>
+  page.evaluate((after) => {
+    const sum = {}
+    for (const r of window.__pager.reflows.filter((r) => r.pass > after)) {
+      for (const [k, n] of Object.entries(r.counts)) sum[k] = (sum[k] ?? 0) + n
+    }
+    return sum
+  }, pass)
+/** Every widget's box must end exactly at the next page's content start, block-level and in-paragraph alike. */
+const checkLanding = async (prefix) => {
+  const landing = await page.evaluate(() => {
+    const { view, layout } = window.__pager
+    const pmTop = view.dom.getBoundingClientRect().top
+    return layout.breaks.map((b, i) => {
+      const w = [...view.dom.querySelectorAll(".page-gap")].find((x) => x.dataset.page === String(i))
+      return { bottom: w ? w.getBoundingClientRect().bottom - pmTop : null, start: layout.pages[i + 1].start }
+    })
+  })
+  landing.forEach((l, i) => {
+    ok(
+      l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5,
+      `${prefix}widget ${i} box bottom = page ${i + 2} content start (${l.start.toFixed(1)})`,
+      l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`
+    )
+  })
+}
 
 console.log("— initial layout")
 const stats1 = await readStats()
@@ -148,21 +175,13 @@ await page.evaluate(() => {
   sel.addRange(range)
   document.querySelector(".ProseMirror").focus()
 })
-const passBefore = await page.evaluate(() => window.__pager.reflows.at(-1)?.pass ?? 0)
+const passBefore = await lastPass()
 for (let i = 0; i < 8; i++) {
   await page.keyboard.press("Enter")
   await page.keyboard.type("newly inserted paragraph")
 }
 await sleep(300)
-// A pass runs per keystroke, so the moves are spread over many passes: sum
-// the DOM operations of every pass the typing caused.
-const chips3 = await page.evaluate((after) => {
-  const sum = {}
-  for (const r of window.__pager.reflows.filter((r) => r.pass > after)) {
-    for (const [k, n] of Object.entries(r.counts)) sum[k] = (sum[k] ?? 0) + n
-  }
-  return sum
-}, passBefore)
+const chips3 = await opsSince(passBefore)
 ok((chips3.other ?? 0) === 0, "break-move reflow: no unexpected mutations", JSON.stringify(chips3))
 ok((chips3.insertBefore ?? 0) > 0, "widgets moved via insertBefore", `insertBefore=${chips3.insertBefore}`)
 ok((chips3.setAttribute ?? 0) > 0, "pushes updated via setAttribute (--push)", `setAttribute=${chips3.setAttribute}`)
@@ -234,26 +253,7 @@ const placement = await page.evaluate(() => {
 ok(placement.bad.length === 0, "every widget sits immediately before its break's content", JSON.stringify(placement.bad))
 ok(placement.inline, "at least one break splits a paragraph mid-text (inline pos)")
 
-// Landing: the whole pipeline is pixel-exact end to end — every widget's
-// box must END exactly at the next page's content start, block-level and
-// in-paragraph alike. The expected starts are the layout's own page starts.
-const readLanding = () =>
-  page.evaluate(() => {
-    const { view, layout } = window.__pager
-    const pmTop = view.dom.getBoundingClientRect().top
-    return layout.breaks.map((b, i) => {
-      const w = [...view.dom.querySelectorAll(".page-gap")].find((x) => x.dataset.page === String(i))
-      return { bottom: w ? w.getBoundingClientRect().bottom - pmTop : null, start: layout.pages[i + 1].start }
-    })
-  })
-const landing = await readLanding()
-landing.forEach((l, i) => {
-  ok(
-    l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5,
-    `widget ${i} box bottom = page ${i + 2} content start (${l.start.toFixed(1)})`,
-    l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`
-  )
-})
+await checkLanding("")
 
 console.log("— justified text: flush lines, including across a page split")
 // Word rects grouped into visual lines — the same measuring method the
@@ -407,16 +407,7 @@ ok(
   "the pass on the stranded-widget state agrees with a full re-run",
   `pass=${JSON.stringify(strandedPass)} rerun=${JSON.stringify(strandedRerun)}`
 )
-// And the geometry stays pixel-exact: every widget still ends exactly at the
-// next page's content start.
-const strandedLanding = await readLanding()
-strandedLanding.forEach((l, i) => {
-  ok(
-    l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5,
-    `stranded-widget layout: widget ${i} ends at page ${i + 2} content start`,
-    l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`
-  )
-})
+await checkLanding("stranded-widget layout: ")
 // Put the deleted text back so the suite ends near its old document.
 await page.evaluate(() => window.__pager.view.focus())
 await page.keyboard.down("Control")
@@ -496,17 +487,11 @@ if ((await rowBreak()) >= 0) {
     view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, pos)))
     view.focus()
   }, k)
-  const passBeforeRow = await page.evaluate(() => window.__pager.reflows.at(-1)?.pass ?? 0)
+  const passBeforeRow = await lastPass()
   const breakBefore = await page.evaluate((k) => window.__pager.layout.breaks[k].pos, k)
   await page.keyboard.type(" and more words typed into a table cell until its row no longer fits on the page".repeat(2))
   await sleep(600)
-  const rowOps = await page.evaluate((after) => {
-    const sum = {}
-    for (const r of window.__pager.reflows.filter((r) => r.pass > after)) {
-      for (const [key, n] of Object.entries(r.counts)) sum[key] = (sum[key] ?? 0) + n
-    }
-    return sum
-  }, passBeforeRow)
+  const rowOps = await opsSince(passBeforeRow)
   const rowState = await page.evaluate((k) => {
     const { view, layout } = window.__pager
     const b = layout.breaks[k]
@@ -516,9 +501,7 @@ if ((await rowBreak()) >= 0) {
   ok(rowState.pos < breakBefore && rowState.inTable, "the grown row moved to the next page whole", `break ${breakBefore} → ${rowState.pos}`)
   ok(rowState.tag === "TR" && rowState.before, "the gap is a table row right before the moved row")
   ok((rowOps.other ?? 0) === 0 && (rowOps.create ?? 0) + (rowOps.remove ?? 0) === 0, "typing in a table: the reflow only reused widgets", JSON.stringify(rowOps))
-  ;(await readLanding()).forEach((l, i) => {
-    ok(l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5, `table layout: widget ${i} ends at page ${i + 2} content start`, l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`)
-  })
+  await checkLanding("table layout: ")
 }
 
 const nestedItem = await page.evaluate(() => {
@@ -537,7 +520,7 @@ if (nestedItem != null) {
     view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, at)))
     view.focus()
   }, nestedItem)
-  const before = await page.evaluate(() => ({ pass: window.__pager.reflows.at(-1)?.pass ?? 0, breaks: window.__pager.layout.breaks.map((b) => b.pos) }))
+  const before = { pass: await lastPass(), breaks: await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos)) }
   await page.keyboard.press("Tab")
   await sleep(500)
   const sunk = await page.evaluate(() => window.__pager.layout.breaks.map((b) => [b.pos, b.remaining]))
@@ -548,20 +531,12 @@ if (nestedItem != null) {
   await page.keyboard.press("Tab")
   await page.keyboard.up("Shift")
   await sleep(500)
-  const listOps = await page.evaluate((after) => {
-    const sum = {}
-    for (const r of window.__pager.reflows.filter((r) => r.pass > after)) {
-      for (const [key, n] of Object.entries(r.counts)) sum[key] = (sum[key] ?? 0) + n
-    }
-    return sum
-  }, before.pass)
+  const listOps = await opsSince(before.pass)
   const lifted = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
   ok(JSON.stringify(sunk) === JSON.stringify(sunkRerun), "after Tab, the layout matches a full re-run", `pass ${JSON.stringify(sunk)} rerun ${JSON.stringify(sunkRerun)}`)
   ok(JSON.stringify(lifted) === JSON.stringify(before.breaks), "Shift-Tab put them back")
   ok((listOps.other ?? 0) === 0 && (listOps.create ?? 0) + (listOps.remove ?? 0) === 0, "indenting a list item: the reflow only reused widgets", JSON.stringify(listOps))
-  ;(await readLanding()).forEach((l, i) => {
-    ok(l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5, `list layout: widget ${i} ends at page ${i + 2} content start`, l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`)
-  })
+  await checkLanding("list layout: ")
 }
 
 console.log("— doc.toJSON() carries no page nodes")

@@ -9,7 +9,7 @@ import type { EditorView } from "prosemirror-view"
 import { MIN_CONTENT_IN, PX_PER_IN, SHEET_H, SHEET_W, marginsOf } from "./layout"
 import type { Margins } from "./layout"
 
-export const MARGIN_PRESETS: Record<string, { label: string; margins: Margins }> = {
+const MARGIN_PRESETS: Record<string, { label: string; margins: Margins }> = {
   normal: { label: "Normal", margins: { top: 1, right: 1, bottom: 1, left: 1 } },
   narrow: { label: "Narrow", margins: { top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 } },
   moderate: { label: "Moderate", margins: { top: 1, right: 0.75, bottom: 1, left: 0.75 } },
@@ -20,17 +20,17 @@ const SIDES = ["top", "bottom", "left", "right"] as const
 
 const sameMargins = (a: Margins, b: Margins) => SIDES.every((s) => a[s] === b[s])
 
-export const docMargins = (state: EditorState): Margins => marginsOf(state.doc.attrs.margins)
+const docMargins = (state: EditorState): Margins => marginsOf(state.doc.attrs.margins)
 
 /** Why a set of margins can't be used, or null when it can. */
-export function marginsError(m: Margins): string | null {
+function marginsError(m: Margins): string | null {
   if (!SIDES.every((s) => Number.isFinite(m[s]) && m[s] >= 0)) return "Margins must be 0 or more inches."
   if (SHEET_H / PX_PER_IN - m.top - m.bottom < MIN_CONTENT_IN) return `Top + bottom must leave at least ${MIN_CONTENT_IN}in of page.`
   if (SHEET_W / PX_PER_IN - m.left - m.right < MIN_CONTENT_IN) return `Left + right must leave at least ${MIN_CONTENT_IN}in of page.`
   return null
 }
 
-export function setMargins(m: Margins): Command {
+function setMargins(m: Margins): Command {
   return (state, dispatch) => {
     if (marginsError(m) || sameMargins(m, docMargins(state))) return false
     dispatch?.(state.tr.setDocAttribute("margins", { ...m }))

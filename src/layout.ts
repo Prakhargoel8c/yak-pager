@@ -20,14 +20,15 @@
  * applyGeometry is the only writer of the geometry CSS variables; styles.css
  * reads them and repeats no number from here.
  */
+import type { PageBreak } from "./solver"
 
 export const PX_PER_IN = 96
 export const SHEET_W = 8.5 * PX_PER_IN // 816
 export const SHEET_H = 11 * PX_PER_IN // 1056
 export const DESK_GAP = 24
-export const BLEED = 8 // shadow room inside the SVG tile, each side
-export const TILE_W = SHEET_W + 2 * BLEED
-export const TILE_H = SHEET_H + 2 * BLEED
+const BLEED = 8 // shadow room inside the SVG tile, each side
+const TILE_W = SHEET_W + 2 * BLEED
+const TILE_H = SHEET_H + 2 * BLEED
 
 /** Page margins in inches, the document's `margins` attr (schema.ts). */
 export interface Margins {
@@ -83,17 +84,6 @@ export function pageGeometry(m: Margins): PageGeometry {
 /** The geometry a document's margins attr asks for. */
 export const geometryOf = (docAttrs: Record<string, unknown>) => pageGeometry(marginsOf(docAttrs.margins))
 
-export interface BreakInfo {
-  /**
-   * Doc position of the first content on the new page (where the widget is
-   * drawn): a block start, or a word inside a paragraph when the break
-   * splits it.
-   */
-  pos: number
-  /** Ragged space left on the page above — the push, carried by the widget. */
-  remaining: number
-}
-
 export interface Page {
   /** Flow y of the page's first content pixel. */
   start: number
@@ -106,7 +96,7 @@ export interface Page {
 /** What a pagination pass computes: where the pages are, for a geometry. */
 export interface Layout {
   geometry: PageGeometry
-  breaks: BreakInfo[]
+  breaks: PageBreak[]
   pages: Page[]
 }
 
@@ -173,44 +163,25 @@ export function paintSheets(stack: HTMLElement, layout: Layout) {
 }
 
 /**
- * The gap widget. Created once per page index, pooled, and reused for the
- * life of the editor: ProseMirror re-inserts the same element (insertBefore)
- * when a break moves, which is exactly the DOM operation rule 3 allows.
- *
- * All children are absolutely positioned relative to the widget, offset by
- * the CSS variable --push = `remaining` (the ragged space above). From the
- * widget's top: [0, push) is the rest of the writable area, then the bottom
- * margin (page number lives here), the desk gap, and the next sheet's top
- * margin.
+ * The gap widget: its box is the whole inter-page space (band + --push in
+ * CSS), its children sit at fixed offsets below the ragged bottom, so a
+ * pooled element's internals never change when its break moves. Between two
+ * table rows it is a <tr> with one cell spanning the table. The page number
+ * is drawn by CSS from data-num, not as text, so a selection across a page
+ * boundary never picks it up.
  */
-export function makeGapWidgetDOM(pageIdx: number): HTMLElement {
-  const el = document.createElement("div")
+export function makeGapDOM(pageIdx: number, row: boolean): HTMLElement {
+  const el = document.createElement(row ? "tr" : "div")
   el.className = "page-gap"
   el.dataset.page = String(pageIdx)
   el.setAttribute("contenteditable", "false")
-  el.append(...gapVisuals(pageIdx))
+  const rule = document.createElement("div")
+  rule.className = "gap-rule"
+  const num = document.createElement("div")
+  num.className = "gap-num"
+  num.dataset.num = String(pageIdx + 1)
+  ;(row ? el.appendChild(document.createElement("td")) : el).append(rule, num)
   return el
-}
-
-/**
- * The gap between two table rows: a row of its own, one cell spanning every
- * column, holding the same visuals. Its height is the band plus --push, like
- * the block widget's.
- */
-export function makeGapRowDOM(pageIdx: number): HTMLElement {
-  const el = document.createElement("tr")
-  el.className = "page-gap"
-  el.dataset.page = String(pageIdx)
-  el.setAttribute("contenteditable", "false")
-  const cell = el.appendChild(document.createElement("td"))
-  cell.append(...gapVisuals(pageIdx))
-  return el
-}
-
-/** How far the widget sits inside a list: its visuals reach back out to the sheet's edges. */
-export function setGapInset(widgetEl: HTMLElement, inset: number) {
-  const v = `${inset}px`
-  if (widgetEl.style.getPropertyValue("--inset") !== v) widgetEl.style.setProperty("--inset", v)
 }
 
 export function setGapColspan(row: HTMLElement, span: number) {
@@ -218,21 +189,8 @@ export function setGapColspan(row: HTMLElement, span: number) {
   if (cell.colSpan !== span) cell.colSpan = span
 }
 
-function gapVisuals(pageIdx: number): HTMLElement[] {
-  const rule = document.createElement("div")
-  rule.className = "gap-rule"
-  const num = document.createElement("div")
-  num.className = "gap-num"
-  // Drawn by CSS (::after) from this attribute, not as text, so selecting
-  // or copying across a page boundary never picks up the number.
-  num.dataset.num = String(pageIdx + 1)
-  return [rule, num]
-}
-
-/** Point the gap's visuals at a new `remaining`. Change-checked: idempotent. */
-export function setPush(widgetEl: HTMLElement, remaining: number) {
-  const v = `${remaining}px`
-  if (widgetEl.style.getPropertyValue("--push") !== v) {
-    widgetEl.style.setProperty("--push", v)
-  }
+/** --push is the ragged space above the gap; --inset how far inside a list it sits (its visuals reach back out). Change-checked. */
+export function setGapVar(widgetEl: HTMLElement, name: "--push" | "--inset", px: number) {
+  const v = `${px}px`
+  if (widgetEl.style.getPropertyValue(name) !== v) widgetEl.style.setProperty(name, v)
 }

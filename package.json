@@ -7,7 +7,6 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "spike": "node tests/spike.mjs",
     "typecheck": "tsc --noEmit",
     "e2e": "node tests/e2e.mjs",
     "pretext-compare": "node tests/pretext-compare.mjs",

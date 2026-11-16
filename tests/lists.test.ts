@@ -4,9 +4,10 @@ import type { Command } from "prosemirror-state"
 import type { Node as PMNode } from "prosemirror-model"
 import { sinkListItem, liftListItem } from "prosemirror-schema-list"
 import { schema } from "../src/schema"
-import { insetAt, units } from "../src/units"
+import { breakSite, units } from "../src/units"
 import { cutPages } from "../src/cutter"
 import { runPass } from "../src/pass"
+import type { MeasureCache } from "../src/pass"
 import { pageGeometry, DEFAULT_MARGINS } from "../src/layout"
 import type { MeasuredBlock } from "../src/measure"
 import type { Measurer } from "../src/measurers"
@@ -115,10 +116,10 @@ describe("list units", () => {
     expect(u[1].inset).toBe(24)
   })
 
-  it("insetAt counts the lists around a position", () => {
-    expect(insetAt(nested, at(nested, "deep") + 1)).toBe(96)
-    expect(insetAt(nested, at(nested, "one.b"))).toBe(48)
-    expect(insetAt(nested, at(nested, "outro"))).toBe(0)
+  it("breakSite counts the lists around a position", () => {
+    expect(breakSite(nested, at(nested, "deep") + 1).inset).toBe(96)
+    expect(breakSite(nested, at(nested, "one.b")).inset).toBe(48)
+    expect(breakSite(nested, at(nested, "outro")).inset).toBe(0)
   })
 })
 
@@ -173,7 +174,7 @@ describe("paginating nested lists", () => {
     const inList = doc.create(null, [ul(li(para))])
     const seen: number[] = []
     const fake: Measurer = { measure: (u) => (seen.push(u.inset), block(10)), invalidate() {} }
-    const cache = new WeakMap<PMNode, MeasuredBlock>()
+    const cache: MeasureCache = new WeakMap()
     runPass({ doc: flat, geometry, measurers: [fake], dirty: null, full: false, cache })
     runPass({ doc: inList, geometry, measurers: [fake], dirty: null, full: false, cache })
     expect(seen).toEqual([0, 24])

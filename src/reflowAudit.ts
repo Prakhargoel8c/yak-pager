@@ -32,8 +32,6 @@ export interface ReflowReport {
 export interface AuditEnv {
   /** The .paper-stack: attribute writes on it are scaffold, not content. */
   stack: Node
-  /** The editor's root: a style write on its child is a push. */
-  editorDom: Node
   /** Widgets created during this pass, as opposed to moved. */
   created: Set<Node>
 }
@@ -108,14 +106,6 @@ export function classify(records: MutationRecord[], env: AuditEnv): { ops: Reflo
           kind: "setAttribute",
           text: `setAttribute ${name}="${final ?? ""}" on ${gapName(t)} (${name === "style" ? "--push" : "housekeeping"})`,
         })
-      } else if (name === "style" && t.parentNode === env.editorDom) {
-        const hadBefore = firstOld != null && firstOld.includes("margin-top")
-        const hasNow = final != null && final.includes("margin-top")
-        if (hasNow) {
-          ops.push({ kind: "setAttribute", text: `setAttribute style "${final}" on ${t.nodeName.toLowerCase()} (push to next page)` })
-        } else if (hadBefore) {
-          ops.push({ kind: "removeAttribute", text: `removeAttribute style on ${t.nodeName.toLowerCase()} (no longer after a break)` })
-        }
       } else {
         ops.push({ kind: "other", text: `attribute ${name} on ${t.nodeName}` })
       }
@@ -140,7 +130,7 @@ export interface ReflowAudit {
   disconnect(): void
 }
 
-export function createReflowAudit(stack: HTMLElement, editorDom: HTMLElement): ReflowAudit {
+export function createReflowAudit(stack: HTMLElement): ReflowAudit {
   const mo = new MutationObserver(() => {})
   mo.observe(stack, { childList: true, subtree: true, attributes: true, attributeOldValue: true })
   const created = new Set<Node>()
@@ -150,7 +140,7 @@ export function createReflowAudit(stack: HTMLElement, editorDom: HTMLElement): R
       mo.takeRecords()
     },
     end() {
-      const result = classify(mo.takeRecords(), { stack, editorDom, created })
+      const result = classify(mo.takeRecords(), { stack, created })
       created.clear()
       return result
     },

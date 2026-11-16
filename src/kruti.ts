@@ -57,7 +57,7 @@ function consonant(ch: string, nukta: boolean, half: boolean): string {
 }
 
 /** Re-encodes Unicode Devanagari for Kruti Dev 010. Characters it has no glyph for pass through. */
-export function unicodeToKruti(text: string): string {
+function unicodeToKruti(text: string): string {
   // Precomposed nukta letters (क़ U+0958 …) as base + nukta.
   let s = text.normalize("NFD")
   s = s.replace(REPH, "$1$2Z")

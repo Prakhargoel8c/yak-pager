@@ -42,7 +42,6 @@ const attribute = (target: unknown, attributeName: string, oldValue: string | nu
 
 const env = (created: unknown[] = []) => ({
   stack: stack as unknown as Node,
-  editorDom: editor as unknown as Node,
   created: new Set(created as Node[]),
 })
 
@@ -104,15 +103,10 @@ describe("classify", () => {
     expect(ops).toEqual([])
   })
 
-  it("a style on a top-level block is a push or its removal; elsewhere it is other", () => {
-    const pushed = el("p", { parent: editor, attrs: { style: "margin-top: 40px" } })
-    const cleared = el("p", { parent: editor })
-    const span = el("span", { parent: pushed, attrs: { style: "color: red" } })
-    const { ops, counts } = classify(
-      [attribute(pushed, "style", null), attribute(cleared, "style", "margin-top: 40px"), attribute(span, "style", null)],
-      env()
-    )
-    expect(counts).toMatchObject({ setAttribute: 1, removeAttribute: 1, other: 1 })
-    expect(ops.map((o) => o.kind)).toEqual(["setAttribute", "removeAttribute", "other"])
+  it("a style written on a block is other: reflow never touches block DOM", () => {
+    const block = el("p", { parent: editor, attrs: { style: "margin-top: 40px" } })
+    const { ops, counts } = classify([attribute(block, "style", null)], env())
+    expect(counts).toMatchObject({ setAttribute: 0, other: 1 })
+    expect(ops[0].text).toBe("attribute style on P")
   })
 })

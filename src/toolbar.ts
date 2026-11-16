@@ -1,19 +1,16 @@
 /**
- * Toolbar — bold, italic, font size, block type, alignment, and the button
- * that inserts an *explicit* page break (the one kind of break that IS a
- * document node).
- *
- * The interesting bit conceptually: marks are ranges in the document, so
- * applying one is a normal transaction (undoable, serializable). Contrast
- * with computed pagination, which never produces a transaction with steps.
+ * Toolbar — marks, block type, alignment, margins, tables, lists and the
+ * explicit page break (the one kind of break that is a document node).
+ * Everything here is an ordinary transaction with steps, undoable and
+ * serialized; computed pagination never is.
  */
 import type { EditorView } from "prosemirror-view"
 import { toggleMark, setBlockType } from "prosemirror-commands"
 import type { Command } from "prosemirror-state"
-import type { Mark, Node } from "prosemirror-model"
+import type { Mark, MarkType, Node } from "prosemirror-model"
 import type { EditorState } from "prosemirror-state"
 import { schema } from "./schema"
-import { FONTS, fontKeyOf, isFontKey } from "./fonts"
+import { FONTS, docFont, fontKeyOf, isFontKey } from "./fonts"
 import type { FontKey } from "./fonts"
 import { buildMarginsControl } from "./marginsControl"
 import { insertTable } from "./tables"
@@ -21,16 +18,12 @@ import { toggleList } from "./lists"
 
 const { strong, em, fontSize, fontFamily } = schema.marks
 
-/** The document's base font, from its doc node. */
-export const docFont = (state: EditorState): FontKey =>
-  isFontKey(state.doc.attrs.font) ? state.doc.attrs.font : "georgia"
-
 /**
- * The font at the cursor, read from the content: the text's fontFamily
- * mark, else the document's base font. Over a selection, the one font all
- * its text shares, or "mixed". "other" is a family not in FONTS (pasted).
+ * The font at the cursor: the text's fontFamily mark, else the document's
+ * base font. Over a selection, the one font all its text shares, or
+ * "mixed". "other" is a family not in FONTS (pasted).
  */
-export function fontAt(state: EditorState): FontKey | "mixed" | "other" {
+function fontAt(state: EditorState): FontKey | "mixed" | "other" {
   const base = docFont(state)
   const of = (marks: readonly Mark[]) => {
     const m = fontFamily.isInSet(marks)
@@ -46,20 +39,16 @@ export function fontAt(state: EditorState): FontKey | "mixed" | "other" {
   return seen.size === 1 ? ([...seen][0] as FontKey | "other") : "mixed"
 }
 
-/**
- * Sets the font of the selection, or of what is typed next. The document's
- * base font is no mark at all, so choosing it removes the fontFamily mark.
- */
-export function setFont(font: FontKey): Command {
+/** Replaces `type` on the selection with `mark` (null removes it), or on what is typed next. */
+function setMark(type: MarkType, mark: Mark | null): Command {
   return (state, dispatch) => {
     const { from, to, empty } = state.selection
     const tr = state.tr
-    const mark = font === docFont(state) ? null : fontFamily.create({ family: FONTS[font].family })
     if (empty) {
-      tr.removeStoredMark(fontFamily)
+      tr.removeStoredMark(type)
       if (mark) tr.addStoredMark(mark)
     } else {
-      tr.removeMark(from, to, fontFamily)
+      tr.removeMark(from, to, type)
       if (mark) tr.addMark(from, to, mark)
     }
     dispatch?.(tr)
@@ -67,13 +56,14 @@ export function setFont(font: FontKey): Command {
   }
 }
 
+/** The document's base font is no mark at all, so choosing it removes the fontFamily mark. */
+const setFont = (font: FontKey, state: EditorState): Command =>
+  setMark(fontFamily, font === docFont(state) ? null : fontFamily.create({ family: FONTS[font].family }))
+
 /**
- * Set text alignment on every block in the selection that carries the
- * `align` attr (paragraphs and headings). Deliberately not one blanket
- * `setBlockType`: applied over a selection it would convert every block to
- * the same type, flattening a heading into a paragraph. Here each block
- * keeps its type and only the attr changes — still one normal transaction,
- * so undo and serialization come for free.
+ * Set `align` on every block in the selection that carries the attr. Not one
+ * blanket `setBlockType`: over a selection it would convert a heading into
+ * a paragraph.
  */
 export function setAlign(align: string): Command {
   return (state, dispatch) => {
@@ -91,50 +81,15 @@ export function setAlign(align: string): Command {
   }
 }
 
-function setFontSize(size: number | null): Command {
-  return (state, dispatch) => {
-    const { from, to, empty } = state.selection
-    const tr = state.tr
-    if (empty) {
-      // Empty selection: set a *stored* mark so the next typed text gets it.
-      tr.removeStoredMark(fontSize)
-      if (size != null) tr.addStoredMark(fontSize.create({ size }))
-    } else {
-      tr.removeMark(from, to, fontSize)
-      if (size != null) tr.addMark(from, to, fontSize.create({ size }))
-    }
-    dispatch?.(tr)
-    return true
-  }
-}
-
-export function insertPageBreak(state: Parameters<Command>[0], dispatch?: Parameters<Command>[1]) {
-  if (!schema.nodes.pageBreak) return false
-  if (dispatch) {
-    dispatch(
-      state.tr
-        .replaceSelectionWith(schema.nodes.pageBreak.create())
-        .scrollIntoView()
-    )
-  }
+export const insertPageBreak: Command = (state, dispatch) => {
+  dispatch?.(state.tr.replaceSelectionWith(schema.nodes.pageBreak.create()).scrollIntoView())
   return true
 }
 
-/**
- * Shift-Enter: insert a hard_break — the schema's one inline node. A line
- * end *inside* a block, not a new block. Refused when the cursor is not in
- * inline content (e.g. a block node is selected), where it would not fit.
- */
-export function insertHardBreak(state: Parameters<Command>[0], dispatch?: Parameters<Command>[1]) {
-  if (!schema.nodes.hard_break) return false
+/** Shift-Enter: a line end inside a block. Refused where inline content can't go (a selected block node). */
+export const insertHardBreak: Command = (state, dispatch) => {
   if (!state.selection.$from.parent.inlineContent) return false
-  if (dispatch) {
-    dispatch(
-      state.tr
-        .replaceSelectionWith(schema.nodes.hard_break.create())
-        .scrollIntoView()
-    )
-  }
+  dispatch?.(state.tr.replaceSelectionWith(schema.nodes.hard_break.create()).scrollIntoView())
   return true
 }
 
@@ -147,43 +102,49 @@ const ALIGNMENTS: Array<[string, string]> = [
   ["justify", "Justify"],
 ]
 
+const BLOCKS: Array<[string, Command]> = [
+  ["Paragraph", setBlockType(schema.nodes.paragraph)],
+  ["Heading 1", setBlockType(schema.nodes.heading, { level: 1 })],
+  ["Heading 2", setBlockType(schema.nodes.heading, { level: 2 })],
+  ["Heading 3", setBlockType(schema.nodes.heading, { level: 3 })],
+]
+
+function button(html: string, title: string, onclick: () => void, className = ""): HTMLButtonElement {
+  const b = document.createElement("button")
+  b.innerHTML = html
+  b.title = title
+  b.className = className
+  b.onclick = onclick
+  return b
+}
+
+function select(title: string, options: Array<[value: string, label: string]>, onchange: (value: string) => void): HTMLSelectElement {
+  const sel = document.createElement("select")
+  sel.title = title
+  for (const [value, label] of options) sel.append(new Option(label, value))
+  sel.onchange = () => onchange(sel.value)
+  return sel
+}
+
 export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () => void } {
   const run = (cmd: Command) => () => {
     cmd(view.state, view.dispatch, view)
     view.focus()
   }
 
-  const strongBtn = document.createElement("button")
-  strongBtn.innerHTML = "<strong>B</strong>"
-  strongBtn.title = "Bold (Mod-B)"
-  strongBtn.onclick = run(toggleMark(strong))
-
-  const emBtn = document.createElement("button")
-  emBtn.innerHTML = "<em>I</em>"
-  emBtn.title = "Italic (Mod-I)"
-  emBtn.onclick = run(toggleMark(em))
-
-  const sizeSel = document.createElement("select")
-  sizeSel.title = "Font size"
-  const clearOpt = document.createElement("option")
-  clearOpt.value = ""
-  clearOpt.textContent = "size –"
-  sizeSel.append(clearOpt)
-  for (const s of FONT_SIZES) {
-    const o = document.createElement("option")
-    o.value = String(s)
-    o.textContent = `${s}px`
-    sizeSel.append(o)
-  }
-  sizeSel.onchange = () => {
-    const v = sizeSel.value
-    run(setFontSize(v === "" ? null : Number(v)))()
-  }
-
-  const fontSel = document.createElement("select")
-  fontSel.title = "Font"
+  const strongBtn = button("<strong>B</strong>", "Bold (Mod-B)", run(toggleMark(strong)))
+  const emBtn = button("<em>I</em>", "Italic (Mod-I)", run(toggleMark(em)))
+  const sizeSel = select(
+    "Font size",
+    [["", "size –"], ...FONT_SIZES.map((s): [string, string] => [String(s), `${s}px`])],
+    (v) => run(setMark(fontSize, v === "" ? null : fontSize.create({ size: Number(v) })))()
+  )
+  const fontSel = select(
+    "Font",
+    Object.entries(FONTS).map(([key, font]): [string, string] => [key, font.label]),
+    (v) => isFontKey(v) && run(setFont(v, view.state))()
+  )
   fontSel.className = "font-select"
-  for (const [key, font] of Object.entries(FONTS)) fontSel.append(new Option(font.label, key))
   // Shown, not chosen: the selection holds several fonts, or one not listed.
   for (const [value, label] of [["mixed", "Mixed fonts"], ["other", "Other font"]]) {
     const o = new Option(label, value)
@@ -191,67 +152,20 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
     o.hidden = true
     fontSel.append(o)
   }
-  fontSel.onchange = () => {
-    if (isFontKey(fontSel.value)) run(setFont(fontSel.value))()
-  }
-
-  const blockSel = document.createElement("select")
-  blockSel.title = "Block type"
-  const blockOptions: Array<[string, Command]> = [
-    ["Paragraph", setBlockType(schema.nodes.paragraph)],
-    ["Heading 1", setBlockType(schema.nodes.heading, { level: 1 })],
-    ["Heading 2", setBlockType(schema.nodes.heading, { level: 2 })],
-    ["Heading 3", setBlockType(schema.nodes.heading, { level: 3 })],
-  ]
-  for (const [label] of blockOptions) {
-    const o = document.createElement("option")
-    o.value = label
-    o.textContent = label
-    blockSel.append(o)
-  }
-  blockSel.onchange = () => {
-    const cmd = blockOptions.find(([label]) => label === blockSel.value)?.[1]
-    if (cmd) run(cmd)()
-  }
-
-  const alignSel = document.createElement("select")
-  alignSel.title = "Alignment"
-  for (const [value, label] of ALIGNMENTS) {
-    const o = document.createElement("option")
-    o.value = value
-    o.textContent = label
-    alignSel.append(o)
-  }
-  alignSel.onchange = () => run(setAlign(alignSel.value))()
-
+  const blockSel = select(
+    "Block type",
+    BLOCKS.map(([label]): [string, string] => [label, label]),
+    (v) => run(BLOCKS.find(([label]) => label === v)![1])()
+  )
+  const alignSel = select("Alignment", ALIGNMENTS, (v) => run(setAlign(v))())
   const margins = buildMarginsControl(view, run)
-
-  const pbBtn = document.createElement("button")
-  pbBtn.textContent = "⤓ Page break"
-  pbBtn.title = "Insert explicit page break (Mod-Enter)"
-  pbBtn.onclick = run(insertPageBreak)
-
+  const pbBtn = button("⤓ Page break", "Insert explicit page break (Mod-Enter)", run(insertPageBreak))
+  const tableBtn = button("Insert table", "Insert a 3 × 3 table with a header row", run(insertTable()), "insert-table")
+  const bulletBtn = button("• List", 'Bullet list (type "- ")', run(toggleList(schema.nodes.bulletList)), "bullet-list")
+  const orderedBtn = button("1. List", 'Numbered list (type "1. ")', run(toggleList(schema.nodes.orderedList)), "ordered-list")
   const hint = document.createElement("span")
   hint.className = "tb-hint"
   hint.textContent = "Ctrl/⌘-Z undoes typing — pagination is never in the undo stack"
-
-  const tableBtn = document.createElement("button")
-  tableBtn.textContent = "Insert table"
-  tableBtn.title = "Insert a 3 × 3 table with a header row"
-  tableBtn.className = "insert-table"
-  tableBtn.onclick = run(insertTable())
-
-  const bulletBtn = document.createElement("button")
-  bulletBtn.textContent = "• List"
-  bulletBtn.title = "Bullet list (type \"- \")"
-  bulletBtn.className = "bullet-list"
-  bulletBtn.onclick = run(toggleList(schema.nodes.bulletList))
-
-  const orderedBtn = document.createElement("button")
-  orderedBtn.textContent = "1. List"
-  orderedBtn.title = "Numbered list (type \"1. \")"
-  orderedBtn.className = "ordered-list"
-  orderedBtn.onclick = run(toggleList(schema.nodes.orderedList))
 
   mount.append(strongBtn, emBtn, fontSel, sizeSel, blockSel, alignSel, margins.el, pbBtn, tableBtn, bulletBtn, orderedBtn, hint)
 
@@ -266,10 +180,8 @@ export function buildToolbar(view: EditorView, mount: HTMLElement): { sync: () =
     sizeSel.value = fs ? String(fs.attrs.size) : ""
     fontSel.value = fontAt(state)
     const parent = selection.$from.parent
-    blockSel.value =
-      parent.type.name === "heading" ? `Heading ${parent.attrs.level}` : "Paragraph"
-    // Blocks without the attr (rules, page breaks) match no option, so the
-    // select shows blank — the control has nothing to say there.
+    blockSel.value = parent.type.name === "heading" ? `Heading ${parent.attrs.level}` : "Paragraph"
+    // Blocks without the attr (rules, page breaks) match no option, so the select shows blank.
     alignSel.value = "align" in parent.attrs ? parent.attrs.align : ""
     margins.sync()
   }

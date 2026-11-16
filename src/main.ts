@@ -18,8 +18,7 @@ import { buildToolbar, insertPageBreak, insertHardBreak } from "./toolbar"
 import { buildPrintPreviewButtons } from "./printPreview"
 import { createDevPanel } from "./devPanel"
 import { installApiMeter } from "./apiMeter"
-import { FONTS, isFontKey } from "./fonts"
-import type { FontKey } from "./fonts"
+import { FONTS, docFont } from "./fonts"
 import type { Layout, PageGeometry } from "./layout"
 import "./styles.css"
 
@@ -78,7 +77,7 @@ const view = new EditorView(paperHost, {
   // is ASCII underneath ("fd" is कि): spellcheck would flag every word and
   // autocorrect would rewrite keystrokes.
   attributes: (state): Record<string, string> => {
-    const font: FontKey = isFontKey(state.doc.attrs.font) ? state.doc.attrs.font : "georgia"
+    const font = docFont(state)
     const attrs: Record<string, string> = { style: `font-family: ${FONTS[font].family}` }
     if (font === "kruti") Object.assign(attrs, { spellcheck: "false", autocorrect: "off", autocapitalize: "off" })
     return attrs
