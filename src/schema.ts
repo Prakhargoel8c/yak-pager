@@ -1,44 +1,28 @@
 /**
- * Schema — a flat list of blocks. There are NO page nodes here; that is rule 1.
- * Computed breaks live in plugin state only. The one exception is `pageBreak`,
- * which *is* authorial intent ("start a new page here"), so it belongs in the
- * document like any other content — it round-trips through serialization and
- * undo like a paragraph would.
- *
- * Built on prosemirror-schema-basic: doc/text/hard_break/horizontal_rule
- * specs are reused verbatim; paragraph is our own spec carrying an `align`
- * attr; heading is constrained to levels 1-3 and carries the same attr;
- * blockquote/image are dropped; the fontSize mark is added.
- *
- * Alignment (left/center/right/justify) is authorial intent, so it lives on
- * the block as a node attr — one real transaction, undoable, serialized.
- * "left" is the default and renders with no style attribute, so ordinary
- * paragraphs keep a clean `<p>` in the DOM.
+ * No page nodes: computed breaks live in plugin state only. `pageBreak` is
+ * authorial intent, so it is a document node like any other. Alignment is a
+ * node attr for the same reason; "left" renders with no style attribute.
  */
 import { Schema } from "prosemirror-model"
 import type { Node, Mark, DOMOutputSpec } from "prosemirror-model"
 import { nodes as basicNodes, marks as basicMarks } from "prosemirror-schema-basic"
+import { tableNodes } from "prosemirror-tables"
 import { DEFAULT_MARGINS } from "./layout"
+import { tableToDOM } from "./tables"
 
 const { text, hard_break, horizontal_rule } = basicNodes
 
-/**
- * The document's base font (a key of FONTS in fonts.ts), applied to the
- * whole editor, and its page margins in inches (layout.ts). Both are
- * authorial intent: changing them is an undoable step.
- */
+/** The base font (a FONTS key) and page margins in inches: both undoable doc attrs. */
 const doc = { ...basicNodes.doc, attrs: { font: { default: "georgia" }, margins: { default: DEFAULT_MARGINS } } }
 const { strong, em } = basicMarks
 
 const ALIGN_VALUES = ["left", "center", "right", "justify"]
 
-/** Parse `text-align` off a parsed element; anything unknown is "left". */
 function alignFromDOM(dom: string | HTMLElement): string {
   const v = (dom as HTMLElement).style?.textAlign
   return ALIGN_VALUES.includes(v) ? v : "left"
 }
 
-/** DOM attributes for a block's alignment: a style only when not default. */
 function alignAttrs(node: Node): { style?: string } {
   const a = node.attrs.align
   return a && a !== "left" ? { style: `text-align: ${a}` } : {}
@@ -79,10 +63,7 @@ const heading = {
   },
 }
 
-/**
- * Explicit, user-inserted page break. Atomic: no content, indivisible.
- * Rendered as a visible marker strip so the author can see and delete it.
- */
+/** Rendered as a visible marker strip so the author can see and delete it. */
 const pageBreak = {
   group: "block",
   atom: true,
@@ -93,7 +74,6 @@ const pageBreak = {
   },
 }
 
-/** fontSize mark: `size` attribute in px, rendered as an inline style. */
 const fontSize = {
   attrs: { size: { default: 16 } },
   parseDOM: [
@@ -112,13 +92,7 @@ const fontSize = {
   },
 }
 
-/**
- * fontFamily mark: a run in a font other than the document's, as a CSS
- * font-family list rendered as an inline style. Inclusive, as in a word
- * processor: typing on from a run keeps its font, and the font dropdown
- * switches it. Spellcheck is off in Kruti Dev runs, whose text is ASCII
- * underneath.
- */
+/** A run in a font other than the document's. Inclusive: typing on from a run keeps its font. */
 const fontFamily = {
   attrs: { family: {} },
   parseDOM: [
@@ -134,12 +108,62 @@ const fontFamily = {
   toDOM(mark: Mark): DOMOutputSpec {
     const family = mark.attrs.family as string
     const attrs: Record<string, string> = { style: `font-family: ${family}` }
+    // Kruti Dev text is ASCII underneath: spellcheck would flag every word.
     if (/^["']?Kruti Dev/i.test(family)) attrs.spellcheck = "false"
     return ["span", attrs]
   },
 }
 
+/** TipTap's table shape: table > tableRow > tableCell | tableHeader, cells hold blocks. */
+const pmTables = tableNodes({ tableGroup: "block", cellContent: "block+", cellAttributes: {} })
+const table = { ...pmTables.table, content: "tableRow+", toDOM: tableToDOM }
+const tableRow = { ...pmTables.table_row, content: "(tableCell | tableHeader)*" }
+
+/** TipTap's list shape: bulletList | orderedList (start) > listItem > paragraph block*. */
+const bulletList = {
+  content: "listItem+",
+  group: "block list",
+  parseDOM: [{ tag: "ul" }],
+  toDOM: (): DOMOutputSpec => ["ul", 0],
+}
+const orderedList = {
+  attrs: { start: { default: 1 } },
+  content: "listItem+",
+  group: "block list",
+  parseDOM: [
+    {
+      tag: "ol",
+      getAttrs: (dom: string | HTMLElement) => {
+        const start = (dom as HTMLElement).getAttribute("start")
+        return { start: start ? parseInt(start, 10) : 1 }
+      },
+    },
+  ],
+  toDOM: (node: Node): DOMOutputSpec => ["ol", node.attrs.start === 1 ? {} : { start: node.attrs.start }, 0],
+}
+const listItem = {
+  content: "paragraph block*",
+  defining: true,
+  parseDOM: [{ tag: "li" }],
+  toDOM: (): DOMOutputSpec => ["li", 0],
+}
+
 export const schema = new Schema({
-  nodes: { doc, paragraph, heading, text, hard_break, horizontal_rule, pageBreak },
+  nodes: {
+    doc,
+    paragraph,
+    heading,
+    text,
+    hard_break,
+    horizontal_rule,
+    pageBreak,
+    table,
+    tableRow,
+    tableCell: pmTables.table_cell,
+    tableHeader: pmTables.table_header,
+    bulletList,
+    orderedList,
+    listItem,
+  },
   marks: { strong, em, fontSize, fontFamily },
 })

@@ -1,67 +1,44 @@
 /**
- * PAGINATION PLUGIN — scheduling, dispatch and widgets around the pass:
- *
- *   pass.ts      MEASURE + SOLVE: doc, geometry, measurers, dirty range and
- *                cache in, layout out. Never dispatches.
- *   this file    DECORATE: turn the layout's breaks into a DecorationSet —
- *                one pooled gap widget per break, between two blocks or
- *                between two words when the break splits a paragraph. The
- *                widget's box (band + --push in CSS) is the entire
- *                inter-page space, so no block DOM is ever touched. It is
- *                moved with insertBefore when a break moves.
- *
- * Scheduling: apply() only does position bookkeeping — it NEVER reads the
- * DOM, because it runs inside the transaction. The plugin's view marks
- * nothing more than "dirty" and runs the pass in a microtask: right after
- * the transaction that dirtied it, before the browser paints, once for all
- * transactions dispatched in the same task. The pass batches all reads
- * first, solves on pure numbers, then everything is applied in ONE
- * meta-transaction. That transaction carries no steps, so it never enters
- * history: Ctrl+Z undoes typing, never pagination.
- *
- * The reflow audit (reflowAudit.ts) records the DOM operations the apply
- * step performed, for the dev panel.
+ * Scheduling and decorating around the pass. apply() only does position
+ * bookkeeping (it runs inside the transaction, so it never reads the DOM);
+ * the view runs the pass in a microtask after the transaction that dirtied
+ * it, before paint, once for all transactions in the same task, and applies
+ * the layout in one meta-transaction. That transaction carries no steps, so
+ * Ctrl+Z undoes typing, never pagination. Each break is one pooled gap
+ * widget, between two blocks or between two words, moved with insertBefore.
  */
 import { Plugin, PluginKey } from "prosemirror-state"
 import type { Transaction, EditorState } from "prosemirror-state"
 import { Decoration, DecorationSet } from "prosemirror-view"
 import type { EditorView } from "prosemirror-view"
-import type { Node as PMNode } from "prosemirror-model"
 import { startMeter, stopMeter } from "./apiMeter"
-import { applyGeometry, emptyLayout, geometryOf, makeGapWidgetDOM, paintSheets, setPush } from "./layout"
-import type { BreakInfo, Layout } from "./layout"
-import type { MeasuredBlock } from "./measure"
+import { applyGeometry, emptyLayout, geometryOf, makeGapDOM, paintSheets, setGapColspan, setGapVar } from "./layout"
+import { breakSite } from "./units"
+import type { Layout } from "./layout"
 import { domMeasurer, pretextMeasurer } from "./measurers"
 import { runPass } from "./pass"
+import type { MeasureCache } from "./pass"
 import { createReflowAudit } from "./reflowAudit"
 import type { ReflowAudit, ReflowReport } from "./reflowAudit"
 
 export interface PaginationState {
   decos: DecorationSet
   layout: Layout
-  /** Doc-coordinate range that must be re-measured before the next solve. */
+  /** Must be re-measured before the next solve. */
   dirty: { from: number; to: number } | null
-  /** How paragraphs and headings are measured; see MeasurerKind. */
   measurer: MeasurerKind
-  /**
-   * A full re-measure was requested (fonts loaded, resize, measurer or
-   * document switch): the next pass also drops what the measurers cached,
-   * which may have been measured in a fallback font.
-   */
+  /** Fonts loaded, resize, measurer or document switch: the next pass also drops what the measurers cached. */
   full: boolean
 }
 
 export const paginationKey = new PluginKey<PaginationState>("pagination")
 
-/** Meta: the pass reports fresh layout (no steps — invisible to history). */
 interface LayoutMeta {
   type: "layout"
   layout: Layout
 }
-/** Meta: fonts/resize/image — re-measure everything (heights can change without the doc changing). */
 interface FullMeta {
   type: "full"
-  /** Switch measurers; the full re-measure that follows uses the new one. */
   measurer?: MeasurerKind
 }
 
@@ -72,10 +49,6 @@ export function requestFullRecompute(view: EditorView) {
 export function setMeasurer(view: EditorView, measurer: MeasurerKind) {
   view.dispatch(view.state.tr.setMeta(paginationKey, { type: "full", measurer } satisfies FullMeta))
 }
-
-/* ------------------------------------------------------------------ */
-/* Position bookkeeping (pure — runs inside transactions)              */
-/* ------------------------------------------------------------------ */
 
 function remapRange(r: { from: number; to: number } | null, tr: Transaction) {
   if (!r) return null
@@ -112,40 +85,32 @@ function unionRange(
   return { from: Math.min(a.from, b.from), to: Math.max(a.to, b.to) }
 }
 
-/* ------------------------------------------------------------------ */
-/* The plugin                                                          */
-/* ------------------------------------------------------------------ */
-
-/**
- * "pretext" (the default) computes paragraphs and headings with Pretext and
- * reads only the blocks it can't model from the DOM. "dom" reads every
- * block's layout from the DOM.
- */
+/** "pretext" reads only the blocks Pretext can't model from the DOM; "dom" reads every block. */
 export type MeasurerKind = "dom" | "pretext"
 
 export function paginationPlugin(
   options: { onReflow?: (report: ReflowReport) => void; measurer?: MeasurerKind } = {}
 ) {
-  // The widget pool, shared by state.apply and the view: element i is
-  // created once and re-inserted forever after.
+  // Element i is created once and re-inserted forever after; a break between two rows takes a <tr> from the row pool.
   const pool = new Map<number, HTMLElement>()
+  const rowPool = new Map<number, HTMLElement>()
   let audit: ReflowAudit | null = null
 
-  const takeFromPool = (i: number) => {
-    let el = pool.get(i)
+  const takeFromPool = (i: number, { inset, columns }: { inset: number; columns: number }) => {
+    const kind = columns > 0 ? rowPool : pool
+    let el = kind.get(i)
     if (!el) {
-      el = makeGapWidgetDOM(i)
-      pool.set(i, el)
+      el = makeGapDOM(i, columns > 0)
+      kind.set(i, el)
       audit?.created(el)
     } else {
-      // The break moved and PM is re-creating this widget's desc while the
-      // pooled element is still attached at the OLD position. Detach it
-      // here: renderDescs then inserts it at the new position with one
-      // insertBefore. Left attached, renderDescs would instead "walk" the
-      // DOM cursor to the old position by removing and re-inserting every
-      // block in between — exactly the churn rule 3 forbids.
+      // Still attached at the old position: detached here, renderDescs inserts
+      // it at the new one with one insertBefore. Left attached, it would walk
+      // its DOM cursor there by removing and re-inserting every block between.
       el.remove()
     }
+    if (columns > 0) setGapColspan(el, columns)
+    setGapVar(el, "--inset", inset)
     return el
   }
 
@@ -161,18 +126,9 @@ export function paginationPlugin(
         full: false,
       }),
 
-      /**
-       * Pure position bookkeeping. Two jobs:
-       *  1. Keep stored positions valid: decorations map themselves through
-       *     tr.mapping; the dirty range is remapped the same way.
-       *  2. Widen the dirty range by whatever this transaction changed, or
-       *     replace the layout entirely when the pass reports in.
-       */
       apply(tr: Transaction, prev: PaginationState): PaginationState {
         const full = tr.getMeta(paginationKey) as FullMeta | undefined
-        // New margins or base font change every block's layout, and the
-        // step that sets a doc attr maps no positions, so it would leave
-        // nothing dirty.
+        // A doc attr step maps no positions, yet new margins or a new base font change every block.
         const docAttrsChanged =
           tr.docChanged &&
           (tr.before.attrs.margins !== tr.doc.attrs.margins || tr.before.attrs.font !== tr.doc.attrs.font)
@@ -186,20 +142,19 @@ export function paginationPlugin(
           }
         }
 
-        // One pass runs per task, so several transactions may precede it:
-        // the dirty range carries over, remapped, and widens by this one.
         const dirty = unionRange(remapRange(prev.dirty, tr), touchedRange(tr))
         let next: PaginationState = { ...prev, decos: prev.decos.map(tr.mapping, tr.doc), dirty }
 
         const meta = tr.getMeta(paginationKey) as LayoutMeta | undefined
         if (meta && meta.type === "layout") {
-          const widgets = meta.layout.breaks.map((b, i) =>
-            Decoration.widget(b.pos, () => takeFromPool(i), {
-              key: `page-gap-${i}`,
+          const widgets = meta.layout.breaks.map((b, i) => {
+            const site = breakSite(tr.doc, b.pos)
+            return Decoration.widget(b.pos, () => takeFromPool(i, site), {
+              key: site.columns > 0 ? `page-gap-row-${i}-${site.columns}` : `page-gap-${i}-${site.inset}`,
               side: -1,
               marks: [],
             })
-          )
+          })
           next = {
             ...next,
             layout: meta.layout,
@@ -222,9 +177,8 @@ export function paginationPlugin(
       const stack = view.dom.parentElement as HTMLElement
       if (!stack) throw new Error("paginationPlugin: editor must be mounted inside .paper-stack")
 
-      // MEASURE cache — keyed by Node object identity, owned per editor.
-      const cache = new WeakMap<PMNode, MeasuredBlock>()
-      const reflowAudit = createReflowAudit(stack, view.dom)
+      const cache: MeasureCache = new WeakMap()
+      const reflowAudit = createReflowAudit(stack)
       audit = reflowAudit
 
       let queued = false
@@ -237,8 +191,7 @@ export function paginationPlugin(
         if (full) pendingFull = true
         if (queued) return
         queued = true
-        // Not synchronously: update() runs inside a dispatch, and the pass
-        // dispatches its own meta-transaction.
+        // update() runs inside a dispatch, and the pass dispatches its own transaction.
         queueMicrotask(() => {
           queued = false
           pass()
@@ -250,13 +203,10 @@ export function paginationPlugin(
         const state = paginationKey.getState(view.state)!
         const full = pendingFull
         pendingFull = false
-        // Idempotence guard: with no dirty range and nothing new to measure,
-        // a pass must do nothing at all.
         if (!full && state.dirty == null && passCount > 0) return
         const t0 = performance.now()
 
-        // The document's margins set the column width the measurers read
-        // and the page height the solver fills; the CSS follows them first.
+        // The CSS follows the margins before the measurers read the column.
         const geometry = geometryOf(view.state.doc.attrs)
         applyGeometry(stack, geometry)
         const measureCalls = startMeter()
@@ -266,17 +216,12 @@ export function paginationPlugin(
         stopMeter()
         const { layout } = result
 
-        // DECORATE: one meta-transaction, audited.
         reflowAudit.begin()
         const t2 = performance.now()
         const applyCalls = startMeter()
         paintSheets(stack, layout)
         view.dispatch(view.state.tr.setMeta(paginationKey, { type: "layout", layout } satisfies LayoutMeta))
-        // Sync the widget visuals (--push). PM ignores mutations on widgets
-        // (ignoreMutation), so these writes never trigger DOM
-        // reconciliation. Every write is change-checked: a stable layout
-        // performs zero DOM operations.
-        syncView(layout.breaks, pool)
+        for (const p of [pool, rowPool]) layout.breaks.forEach((b, i) => p.has(i) && setGapVar(p.get(i)!, "--push", b.remaining))
         stopMeter()
         const { ops, counts } = reflowAudit.end()
         const t3 = performance.now()
@@ -309,24 +254,11 @@ export function paginationPlugin(
           destroyed = true
           reflowAudit.disconnect()
           audit = null
-          for (const el of pool.values()) el.remove()
+          for (const el of [...pool.values(), ...rowPool.values()]) el.remove()
           pool.clear()
+          rowPool.clear()
         },
       }
     },
-  })
-}
-
-/**
- * Align the view with the computed layout: point each pooled widget's --push
- * at the fresh `remaining`. The widget's own box height derives from --push
- * in CSS (calc(var(--band) + var(--push))), so this one write IS the push.
- * Writes are change-checked, so an unchanged layout performs zero DOM
- * operations.
- */
-function syncView(breaks: BreakInfo[], pool: Map<number, HTMLElement>) {
-  breaks.forEach((b, i) => {
-    const w = pool.get(i)
-    if (w) setPush(w, b.remaining)
   })
 }

@@ -11,3 +11,7 @@ Then schedule runs the pass in a microtask after each transaction, before the br
 
 Some interesting bits are -
 - split candidates - this is where it calculates split positions of every line in a para.
+
+Tables (`?lang=table`, or the toolbar's Insert table) paginate row by row: each row is an atomic unit, Pretext predicts its height from its cells at their column widths, and the gap between two rows is a table row. See design_decisions.md section 6, and `npm run table-spike` for the table vs CSS grid comparison.
+
+Lists (`?lang=list`, the toolbar's list buttons, or `- ` / `1. `) are walked into: every paragraph of every item is its own unit, measured by Pretext at its nesting level's width and split at line boundaries like any paragraph. See design_decisions.md section 7.

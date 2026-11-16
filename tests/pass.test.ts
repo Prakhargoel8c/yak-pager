@@ -1,17 +1,17 @@
 import { describe, it, expect } from "vitest"
-import type { Node as PMNode } from "prosemirror-model"
 import { schema } from "../src/schema"
 import { pageGeometry, DEFAULT_MARGINS } from "../src/layout"
 import type { MeasuredBlock } from "../src/measure"
 import type { Measurer } from "../src/measurers"
 import { runPass } from "../src/pass"
+import type { MeasureCache } from "../src/pass"
 import type { Unit } from "../src/units"
 
 const geometry = pageGeometry(DEFAULT_MARGINS)
 const t = (s: string) => schema.text(s)
 const p = (s: string) => schema.nodes.paragraph.create(null, t(s))
 
-/** A measurer that answers from a table of heights by text, declining anything else. */
+/** Answers from a table of heights by text, declining anything else. */
 function fake(heights: Record<string, MeasuredBlock>) {
   const calls: string[] = []
   let invalidated = 0
@@ -32,7 +32,7 @@ const block = (height: number): MeasuredBlock => ({ height, splitCandidates: nul
 describe("runPass", () => {
   it("measures every unit on the first pass and only the dirty range after", () => {
     const doc = schema.nodes.doc.create(null, [p("a"), p("b"), p("c")])
-    const cache = new WeakMap<PMNode, MeasuredBlock>()
+    const cache: MeasureCache = new WeakMap()
     const { m, calls } = fake({ a: block(100), b: block(200), c: block(300) })
     const first = runPass({ doc, geometry, measurers: [m], dirty: null, full: false, cache })
     expect(first.measured).toBe(3)
@@ -47,7 +47,7 @@ describe("runPass", () => {
 
   it("a full pass invalidates the measurers and re-measures everything", () => {
     const doc = schema.nodes.doc.create(null, [p("a"), p("b")])
-    const cache = new WeakMap<PMNode, MeasuredBlock>()
+    const cache: MeasureCache = new WeakMap()
     const { m, invalidated } = fake({ a: block(10), b: block(20) })
     runPass({ doc, geometry, measurers: [m], dirty: null, full: false, cache })
     const r = runPass({ doc, geometry, measurers: [m], dirty: null, full: true, cache })
@@ -57,7 +57,7 @@ describe("runPass", () => {
 
   it("falls through to the next measurer when the first declines", () => {
     const doc = schema.nodes.doc.create(null, [p("a"), schema.nodes.horizontal_rule.create()])
-    const cache = new WeakMap<PMNode, MeasuredBlock>()
+    const cache: MeasureCache = new WeakMap()
     const first = fake({ a: block(100) })
     const second = fake({ "": block(30) })
     const r = runPass({ doc, geometry, measurers: [first.m, second.m], dirty: null, full: false, cache })
@@ -66,11 +66,9 @@ describe("runPass", () => {
   })
 
   it("reports pages with their start, fill and opening break", () => {
-    // 800 + 200 overflows: the second paragraph opens page 2 at a block
-    // boundary. The third splits at its one line boundary: page 3 opens
-    // inside it, and the carried part is measured by the solver's rule.
+    // 800 + 200 overflows, so the second paragraph opens page 2; the third splits, so page 3 opens inside it.
     const doc = schema.nodes.doc.create(null, [p("a"), p("b"), p("long paragraph")])
-    const cache = new WeakMap<PMNode, MeasuredBlock>()
+    const cache: MeasureCache = new WeakMap()
     const { m } = fake({
       a: block(800),
       b: block(200),
@@ -87,7 +85,7 @@ describe("runPass", () => {
 
   it("an explicit page break forces a break before the next unit", () => {
     const doc = schema.nodes.doc.create(null, [p("a"), schema.nodes.pageBreak.create(), p("b")])
-    const cache = new WeakMap<PMNode, MeasuredBlock>()
+    const cache: MeasureCache = new WeakMap()
     const { m } = fake({ a: block(100), b: block(100), "": block(17) })
     const { layout } = runPass({ doc, geometry, measurers: [m], dirty: null, full: false, cache })
     expect(layout.breaks).toEqual([{ pos: 4, remaining: 864 - 117 }])

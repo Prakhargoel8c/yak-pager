@@ -1,8 +1,7 @@
 /**
- * Transient-state probe v2: delete the content before/after a straddling
- * paragraph's widget via a real PM transaction, then probe what measureBlock
- * would compute BEFORE the next pass runs, and compare with the layout
- * after the pass and after a forced full re-run.
+ * Probe: delete the content before or after a straddling paragraph's widget,
+ * then compare what measureBlock computes before the next pass with the
+ * layout after it and after a full re-run.
  */
 import { spawn } from "node:child_process"
 import puppeteer from "puppeteer-core"
@@ -28,9 +27,7 @@ const MEASURE_FN = `
 function measureP(p) {
   const rect = p.getBoundingClientRect()
   const ws = [...p.querySelectorAll('.page-gap')]
-  // Same rule as the fixed measureBlock: a widget rect that overhangs the
-  // block's rect was never part of the block's height, so it is not
-  // subtracted either.
+  // As in measureBlock: a widget overhanging the block's rect is not subtracted.
   const wr = ws
     .map((w) => w.getBoundingClientRect())
     .filter((r) => r.bottom <= rect.bottom + 1)

@@ -1,10 +1,7 @@
 /**
- * Counts calls to browser APIs that cost something while a pagination pass
- * runs, for the dev panel. installApiMeter() wraps the APIs once; until it
- * is called, meter() only runs its function, so the plugin works unmetered.
- *
- * "layout" calls force the browser to compute layout (or style) if it is
- * stale; "text" calls shape or segment text.
+ * Counts costly browser calls during a pass, for the dev panel: "layout"
+ * calls force layout or style, "text" calls shape or segment text. Until
+ * installApiMeter() wraps them, nothing is counted.
  */
 export type ApiCounts = Record<string, number>
 
@@ -61,7 +58,6 @@ export function installApiMeter() {
   wrapMethod(Intl.Segmenter?.prototype, "segment", "Intl.Segmenter.segment", "text")
 }
 
-/** Starts counting into a fresh ApiCounts; stopMeter() ends it. */
 export function startMeter(): ApiCounts {
   current = {}
   return current

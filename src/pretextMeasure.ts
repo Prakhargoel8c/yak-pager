@@ -1,22 +1,11 @@
 /**
- * MEASURE without the DOM: paragraph and heading heights, and the paragraph
- * line boundaries the solver splits at, computed with Pretext
- * (@chenglou/pretext) from the node's text and marks alone.
- *
- * Pretext measures text with Canvas and breaks lines by the browser engine's
- * own rules, so it predicts the lines the editor paints without a layout
- * read. The DOM path (measure.ts) stays the reference and the fallback:
- * measureWithPretext returns null for anything it cannot model, and the
- * pass then measures that block from the DOM as before.
- *
- * Because no DOM is read, a paragraph that currently holds its gap widget
- * needs no widget subtraction: the numbers come from the document, so
- * re-measuring is idempotent by construction.
- *
- * Block styles come from typography.ts, the same table the editor's CSS is
- * generated from.
+ * Measuring without the DOM: paragraph, heading and table row heights, and
+ * the line boundaries the solver splits at, computed with Pretext from the
+ * node's text and marks. Null for anything it can't model; the DOM path
+ * (measure.ts) is the reference and the fallback. Block styles come from
+ * typography.ts, the table the editor's CSS is generated from.
  */
-import type { Mark } from "prosemirror-model"
+import type { Mark, Node as PMNode } from "prosemirror-model"
 import type { EditorView } from "prosemirror-view"
 import {
   layoutNextRichInlineLineRange,
@@ -27,7 +16,8 @@ import {
 import type { PreparedRichInline, RichInlineItem, RichInlineLineRange } from "@chenglou/pretext/rich-inline"
 import type { MeasuredBlock } from "./measure"
 import type { SplitCandidate } from "./solver"
-import { TEXT_FLOW, blockStyle } from "./typography"
+import { columnWidths, tableColumns } from "./tables"
+import { TABLE, TEXT_FLOW, blockStyle, cellBlockStyle } from "./typography"
 import type { BlockStyle } from "./typography"
 import type { Unit } from "./units"
 
@@ -49,16 +39,13 @@ const inlineBoxes = new Map<string, InlineBox>()
 
 const edgeFits = new Map<string, boolean>()
 
-/** Forget probed line boxes and edge lines: a web font that finished loading has new metrics. */
+/** A web font that finished loading has new metrics. */
 export function clearInlineBoxes(): void {
   inlineBoxes.clear()
   edgeFits.clear()
 }
 
-/**
- * Whether the browser keeps this text on one line at `width`: laid out once
- * in a hidden probe with the editor's text settings, and cached.
- */
+/** Whether the browser keeps this text on one line at `width`: laid out once in a hidden probe, and cached. */
 function fitsInBrowser(runs: { text: string; font: string }[], width: number): boolean {
   const key = `${width}|${runs.map((r) => `${r.font}\u0000${r.text}`).join("\u0001")}`
   let fits = edgeFits.get(key)
@@ -87,10 +74,7 @@ function fitsInBrowser(runs: { text: string; font: string }[], width: number): b
   return fits
 }
 
-/**
- * The block's line ranges at `width`. Pretext breaks every line; a line
- * whose fit is within EDGE of the column is settled by the browser.
- */
+/** The block's line ranges at `width`; a line within EDGE of the column is settled by the browser. */
 function lineRanges(prepared: PreparedRichInline, items: RichInlineItem[], width: number): RichInlineLineRange[] {
   const ranges: RichInlineLineRange[] = []
   let close = false
@@ -131,13 +115,11 @@ function lineRanges(prepared: PreparedRichInline, items: RichInlineItem[], width
 
 /**
  * Where an inline box of `size`px `family` text at a unitless `lineHeight`
- * sits around the baseline, as this browser lays it out. Its height is the
- * line-height, but the split above and below the baseline follows the
- * font's ascent and descent, so a line mixing two fonts (Kruti Dev and
- * Georgia) is taller than either alone. Also not size × lineHeight exactly:
- * WebKit rounds line heights down to whole pixels (22px × 1.3 is 28 there,
- * 28.6 in Chrome and Firefox). Read once per font and size from a hidden
- * probe, and cached.
+ * sits around the baseline. The split above and below the baseline follows
+ * the font's ascent and descent, so a line mixing two fonts is taller than
+ * either alone; and WebKit rounds line heights down to whole pixels (22px ×
+ * 1.3 is 28 there, 28.6 in Chrome and Firefox). Probed once per font and
+ * size from a hidden element.
  */
 function inlineBox(family: string, size: number, lineHeight: number): InlineBox {
   const key = `${family}/${size}/${lineHeight}`
@@ -158,7 +140,7 @@ function inlineBox(family: string, size: number, lineHeight: number): InlineBox 
   return box
 }
 
-/** A line box's height: from the highest top to the lowest bottom of its inline boxes. */
+/** From the highest top to the lowest bottom of the line's inline boxes. */
 function lineHeightOf(boxes: InlineBox[]): number {
   let above = 0
   let below = 0
@@ -186,7 +168,7 @@ function runFont(marks: readonly Mark[], base: BlockStyle, column: Column): { fo
   return { font: `${italic ? "italic " : ""}${weight} ${size}px ${family}`, family, size }
 }
 
-/** The editor's text column: its content width and font-family, read from the editor. */
+/** The editor's text column: its content width and font-family. */
 export interface Column {
   width: number
   family: string
@@ -198,23 +180,44 @@ interface Line {
   pos: number | null
 }
 
-/**
- * One block's height and split candidates, or null when the block isn't a
- * paragraph or heading, or holds inline content other than text and hard
- * breaks.
- *
- * Line heights follow CSS for a unitless line-height: each run's inline box
- * is aligned on the baseline (inlineBox), and a line spans from the highest
- * top to the lowest bottom, the block's own strut included. Split candidates use the same convention as
- * measure.ts: positions relative to the content start, heights to the
- * carried line's line-box top.
- */
 export function measureWithPretext(unit: Unit, column: Column): MeasuredBlock | null {
-  const { node } = unit
-  const style = blockStyle(node)
+  if (unit.row) return measureRow(unit.node, unit.row.table, column)
+  const style = blockStyle(unit.node)
   if (!style) return null
+  const m = measureText(unit.node, style, unit.inset ? { ...column, width: column.width - unit.inset } : column)
+  return m && { height: m.height, splitCandidates: unit.kind === "splittable" && m.splits.length > 0 ? m.splits : null }
+}
 
-  // Every line holds the block's own strut, in its font and size.
+/** The tallest cell: its blocks stacked at the cell's content width, plus padding and bottom border. */
+function measureRow(row: PMNode, table: PMNode, column: Column): MeasuredBlock | null {
+  const widths = columnWidths(tableColumns(table), column.width)
+  let col = 0
+  let tallest = 0
+  let supported = true
+  row.forEach((cell) => {
+    const span = cell.attrs.colspan as number
+    const outer = widths.slice(col, col + span).reduce((a, b) => a + b, 0)
+    const width = outer - 2 * TABLE.padX - TABLE.border - (col === 0 ? TABLE.border : 0)
+    col += span
+    const header = cell.type.name === "tableHeader"
+    let height = 0
+    cell.forEach((block) => {
+      const style = cellBlockStyle(block, header)
+      const m = style && measureText(block, style, { ...column, width })
+      if (!m) supported = false
+      else height += m.height
+    })
+    tallest = Math.max(tallest, height)
+  })
+  return supported ? { height: tallest + 2 * TABLE.padY + TABLE.border, splitCandidates: null } : null
+}
+
+/**
+ * Line heights follow CSS for a unitless line-height: each run's inline box
+ * sits on the baseline, and a line spans from the highest top to the lowest
+ * bottom, the block's own strut included.
+ */
+function measureText(node: PMNode, style: BlockStyle, column: Column): { height: number; splits: SplitCandidate[] } | null {
   const strut = inlineBox(column.family, style.size, style.lineHeight)
   const items: RichInlineItem[] = []
   const starts: number[] = []
@@ -237,7 +240,6 @@ export function measureWithPretext(unit: Unit, column: Column): MeasuredBlock | 
 
   const lines: Line[] = []
   if (items.length > 0) {
-    // The editor is white-space: pre-wrap (#paper .ProseMirror).
     const prepared = prepareRichInline(items, { whiteSpace: "pre-wrap" })
     for (const range of lineRanges(prepared, items, column.width)) {
       const line = materializeRichInlineLineRange(prepared, range)
@@ -265,17 +267,10 @@ export function measureWithPretext(unit: Unit, column: Column): MeasuredBlock | 
     if (i > 0 && line.pos !== null) splits.push({ pos: line.pos, height: style.padTop + top })
     top += line.height
   })
-  return {
-    height: style.padTop + top + style.padBottom,
-    splitCandidates: unit.kind === "splittable" && splits.length > 0 ? splits : null,
-  }
+  return { height: style.padTop + top + style.padBottom, splits }
 }
 
-/**
- * The editor's text column: its content box, inside the side padding that is
- * the page margin, and its font-family (Kruti Dev for a Hindi document). One
- * layout read per pass, in place of reading every word's rect.
- */
+/** One layout read per pass: the column inside the editor's side padding (the page margin), and its font-family. */
 export function editorColumn(view: EditorView): Column {
   const style = getComputedStyle(view.dom)
   return {

@@ -71,6 +71,8 @@ No element created or destroyed. No subtree reparented. The `<table>` keeps its 
 
 **The page look is CSS.** A fixed-width white column with a shadow.
 
+**The push lives in the widget, not on the block.** The gap widget's box is the whole inter-page space: the band plus a `--push` CSS variable set to the ragged space left above, and its children sit at fixed offsets below that, so a pooled element's internals never change when its break moves. A node decoration with a `margin-top` style was tried and rejected: prosemirror-view reconciles attribute mutations on block descs by marking them dirty and rebuilding their elements, which quietly broke the no-churn rule. Widgets are exempt (`ignoreMutation`), so every layout write goes through the widget. A moved widget is detached from its old position before ProseMirror re-inserts it: left attached, `renderDescs` would walk its DOM cursor to the old position by removing and re-inserting every block in between.
+
 ---
 
 # 4. Alignment lives in the document
@@ -102,6 +104,51 @@ MEASURE for paragraphs and headings uses [Pretext](https://github.com/chenglou/p
 
 ---
 
+# 6. Tables are HTML tables, paginated row by row
+
+The schema follows TipTap's table extension (`table` > `tableRow` > `tableCell` | `tableHeader`, cells hold blocks, cell attrs `colspan`, `rowspan`, `colwidth`), built with `prosemirror-tables`' `tableNodes`, so it can move into a TipTap editor as is. Editing (cell selection, Tab between cells, column resizing) is `prosemirror-tables` unchanged; the toolbar's "Insert table" adds a 3 × 3 table with a header row. `?lang=table` is the English seed with three tables.
+
+**Rows are units.** `units.ts` places a table row by row (each `atomic`), so a page may end between two rows, never inside one. The first row's unit starts at the table, so a break before it is an ordinary break before the table. A table with a rowspan moves whole for now.
+
+**Measuring a row with Pretext.** A row is as tall as its tallest cell: the cell's blocks stacked at the cell's content width, plus padding and border. That only holds with a few rules, all in `typography.ts` and `tables.ts`:
+
+- `table-layout: fixed` with a `<colgroup>` of whole-pixel widths. A resized column keeps its `colwidth`; the others share the rest of the column, rounded down, the last taking the remainder. The CSS computes the same numbers from `--content-w` (`round(down, …)`), so a margin change needs no JS. Auto layout sizes columns from content, which Pretext can't predict.
+- Separate borders (`border-spacing: 0`): every cell draws its right and bottom border, first-column cells their left, the table its top. Each row's height is then independent of where it sits, and the table's top border and the space below it are the first and last rows' `extra`, added by the pass outside the measure cache.
+- Blocks in a cell have no margin or padding; `vertical-align: top`; header cells are bold, which the cell style tells Pretext.
+
+**The gap between two rows is a row.** The pooled widget for a break before a row is a `<tr>` with one cell spanning every column, placed in the `<tbody>` by the same `Decoration.widget`; its height is band + push like the block widget's. The row after it lands on the next page's content start, and an inset shadow draws its top border there. Print (`cutter.ts`) cuts the table into one table per page with the same rows.
+
+**Why not CSS grid.** Measured by `tests/table-spike.mjs`, which renders every table of `?lang=table` (32 rows: multi-line and uneven cells, a Kruti Dev cell, a Unicode Hindi cell, a colspan, resized columns) and a table in the Kruti Dev document each way, and compares each row with the Pretext prediction:
+
+| rendering | rows off by ≥ 0.5px | a 200px gap before a row |
+| --- | --- | --- |
+| `<table>`, fixed layout, separate borders | 0 / 35 | exact; nothing else moves |
+| `<table>`, `border-collapse: collapse` | 0 / 35 | lands, but rows below move 199.5px and row heights change: the gap row takes half the shared border |
+| `<table>`, auto layout | 29 / 35, worst 168px | — |
+| CSS grid, `display: contents` rows | 0 / 35 | exact |
+
+Grid predicts as well as a fixed table and takes a gap just as cleanly, so the choice came down to editing. `prosemirror-tables` assumes table DOM: in the live editor as a grid, cell selection still works, but dragging a column edge changes nothing on screen — the resize preview writes `<col>` widths, which a grid ignores — and after the drag the doc holds the new `colwidth` while the grid keeps its old track. A grid would need its own column templates, resize preview, `grid-column`/`grid-row` spans for colspan and rowspan, and it drops table semantics for assistive technology. The table needs none of that.
+
+**Open:** a row taller than a page is placed alone and overflows it (it needs splitting at line boundaries across its cells); rowspans move the table whole; the header row isn't repeated on the next page (feasible either way: the gap row can carry a copy of the header in a nested table with the same colgroup, and the solver adds its height to the next page); a column being dragged reflows its rows, but pagination follows only when the drag commits.
+
+---
+
+# 7. Lists are walked into, not placed whole
+
+The schema follows TipTap's list extensions: `bulletList` and `orderedList` (attr `start`) hold `listItem`s, whose content is `paragraph block*`. Editing is `prosemirror-schema-list`: Enter splits an item, Tab and Shift-Tab sink and lift it (in a table cell they still move between cells), `- ` and `1. ` start a list, and the toolbar's two list buttons wrap, switch or lift. `?lang=list` is the English seed as lists four levels deep; the Kruti Dev document carries a three-level list.
+
+**Every block in a list is a unit.** `units.ts` walks into lists, so a paragraph four levels deep is a splittable unit like any other: Pretext measures it at the column width less `LIST.indent` (24px, a whole number like the table columns) per level, and it breaks at a line boundary. A list adds no height of its own: lists, items and the blocks in them have no margins (`typography.ts`), the marker sits outside in the indent, and the space between items is the paragraphs' own bottom padding. A block that is an item's first content starts its unit at the item, and an item's list's first at the list, so a break before it falls before the item (or list): an item is never separated from its marker. The pass re-measures a block whose indent changed even when its node didn't (sinking an item can keep the paragraph's node).
+
+The gap widget is the same pooled element, wherever the break falls: between items it is a block inside the `<ul>`/`<ol>`, inside a paragraph it is the float. Its page rule and number reach back out to the sheet's edges by `--inset`, set from the number of lists around the break.
+
+**Print** slices the document between breaks (`doc.slice`, with parents), so every list, item and paragraph a cut runs through is closed on one page and reopened on the next at the same depth. A reopened ordered list gets `start` = its start + the index of its first item there; an item cut in two hides its marker on the second page (`li-continued`), so numbers carry on and are never repeated.
+
+**Lists in table cells** make that row fall back to the DOM measurer (cells are measured block by block, and a list isn't modeled there). **Tables in list items** move whole, measured from the DOM.
+
+**Open:** a list nested in a table cell isn't Pretext-measured; a heading or rule in an item is atomic like at top level.
+
+---
+
 # Open Questions
 
 ## How to split paragraphs
@@ -119,7 +166,7 @@ The following are two proposals:
 
 Needs to be verified practically.
 
-**Verified (spike): the float approach is pixel-exact.** The spike lives in `tests/spike-split.html` + `tests/spike.mjs` (run: `npm run spike`). It reproduces the paper geometry and places real spacers at measured line boundaries. Measured in Chrome:
+**Verified (spike): the float approach is pixel-exact.** The spike (a standalone page placing real spacers at measured line boundaries in the paper geometry; no longer in the repo, the e2e suite's landing checks carry the assertion) measured in Chrome:
 
 - The float's box bottom lands on the next page's content start to 0.00px in every scenario: plain text, `text-align: justify`, mixed font sizes, and one paragraph spanning three pages (two spacers). The first carried word sits a half-leading (3px) below the page start, which is the exact same place a fresh paragraph starting that page puts its first word — so a split paragraph looks identical to a block-level break.
 - Nothing above the split moves and nothing re-wraps. Line-by-line word sequences are identical before and after insertion, horizontal positions are unchanged, and justify holds across the spacer (split lines do not go ragged).
@@ -138,6 +185,8 @@ Two bugs the e2e suite caught during implementation, worth remembering:
 
 - **Split positions must be cached node-local.** The measure cache is keyed by node identity, and an insertion elsewhere in the document preserves the node while shifting its doc positions. Caching absolute positions therefore served stale positions on cache hits, and the widget rendered a line or two away from where the solver's heights said it should be. Candidates are now cached as offsets from the paragraph's content start and made absolute against the current offset at each pass.
 - **The e2e state lookup was vacuously passing.** `p.getState?.(p.key ?? "pagination")` passes a key where ProseMirror expects an editor state, so it always returned undefined and the old placement check passed against an empty list. `window.__pager` now exposes the plugin key and the tests read state through it.
+- **A stranded widget must not be subtracted.** Deleting everything after a widget inside a straddling paragraph leaves its float anchored at the paragraph's end with no line below it, overhanging the paragraph's rect. The DOM measurer subtracted the widget's box from a rect that never contained it, measuring the paragraph about a band shorter than it is, and the solve pulled later blocks up across page boundaries. Only widget rects contained in the block's rect are subtracted now.
+- **A mark change dirties nothing by itself.** Adding or removing a mark (and setting a node attribute) maps no positions, so `tr.changedRange()` is null and the pass never ran; a paragraph made larger near a page's bottom overflowed into the gap until something else triggered a pass. The plugin widens the dirty range by the from/to of every step with an empty map.
 
 The e2e suite verifies the feature end to end: at least one break is inline, every widget sits immediately before its break's content (block or word), and every widget's box bottom lands within 0.5px of the next page's content start — including after typing inside a paragraph that straddles a boundary, where the reflow performs only pooled-widget reuse (insertBefore, text re-splits, `--push` writes).
 

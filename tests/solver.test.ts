@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { solve, BAND } from "../src/solver"
 
-// Synthetic block factory: heights chosen to exercise the accumulator.
-// Positions are arbitrary doc coordinates of the same order as the heights.
 const blocks = (heights: number[]) =>
   heights.map((height, i) => ({ pos: i * 10, height }))
 
@@ -19,7 +17,6 @@ describe("solve", () => {
   it("no overflow: exact fit does not break (>= is the boundary)", () => {
     const r = solve(blocks([864]), PAGE)
     expect(r.breaks).toEqual([])
-    // one block at exactly page height: no break, page exactly full
     const r2 = solve(blocks([432, 432]), PAGE)
     expect(r2.breaks).toEqual([])
     expect(r2.fills).toEqual([864])
@@ -93,9 +90,7 @@ describe("solve", () => {
 })
 
 describe("solve with line splits", () => {
-  /** A paragraph of n lines, lineHeight each: candidates at every line
-   * boundary after the first, positions 100, 101, 102, ... (arbitrary
-   * inline positions ascending with height, as MEASURE produces). */
+  /** A paragraph of n lines, lineHeight each, with a candidate at every line boundary after the first (positions 100, 101, …). */
   const para = (lines: number, lineHeight: number) => ({
     pos: 10,
     height: lines * lineHeight,
