@@ -71,14 +71,14 @@ ok((chips1.other ?? 0) === 0, "no unexpected DOM mutations", `other=${chips1.oth
 // runs a later full pass, which reuses the widgets the first one created.
 const created = await page.evaluate(() => window.__pager.reflows.reduce((n, r) => n + (r.counts.create ?? 0), 0))
 ok(created > 0, "gap widgets created once at startup", `create=${created}`)
-// The print document lays text out in 816 - 2 x 96 = 624px; a wider screen
+// The print document lays text out in the geometry's column; a wider screen
 // column wraps lines differently and print pages stop matching the screen.
 const column = await page.evaluate(() => {
   const ed = window.__pager.view.dom
   const cs = getComputedStyle(ed)
-  return ed.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+  return { editor: ed.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), geometry: window.__pager.geometry.contentW }
 })
-ok(column === 624, "editor column is 624px, the print column", `column=${column}`)
+ok(column.editor === column.geometry, "editor column is the geometry's content width", JSON.stringify(column))
 
 console.log("— idempotence: force full re-measure of stable layout")
 const before = await page.evaluate(() => document.querySelector(".paper-stack")?.innerHTML.length)
@@ -208,9 +208,9 @@ ok(
 // inside a paragraph, so resolve the DOM point at break.pos and check the
 // widget is its previous element sibling.
 const placement = await page.evaluate(() => {
-  const { view, key } = window.__pager
+  const { view, layout } = window.__pager
   const s = view.state
-  const bl = key.getState(s)?.breaks ?? []
+  const bl = layout.breaks
   const bad = []
   bl.forEach((b, i) => {
     const w = [...view.dom.querySelectorAll(".page-gap")].find(
@@ -236,32 +236,22 @@ ok(placement.inline, "at least one break splits a paragraph mid-text (inline pos
 
 // Landing: the whole pipeline is pixel-exact end to end — every widget's
 // box must END exactly at the next page's content start, block-level and
-// in-paragraph alike. Expected page starts are derived from the same
-// arithmetic the solver used: pageStart_{k+1} = pageStart_k + max(fill_k,
-// 864) + 216, with fill_k = 864 - remaining_k.
-const CONTENT_H = 864
-const BAND = 216
-const landing = await page.evaluate(() => {
-  const { view, key } = window.__pager
-  const pmTop = view.dom.getBoundingClientRect().top
-  const s = view.state
-  return (key.getState(s)?.breaks ?? []).map((b, i) => {
-    const w = [...view.dom.querySelectorAll(".page-gap")].find(
-      (x) => x.dataset.page === String(i)
-    )
-    return {
-      bottom: w ? w.getBoundingClientRect().bottom - pmTop : null,
-      remaining: b.remaining,
-    }
+// in-paragraph alike. The expected starts are the layout's own page starts.
+const readLanding = () =>
+  page.evaluate(() => {
+    const { view, layout } = window.__pager
+    const pmTop = view.dom.getBoundingClientRect().top
+    return layout.breaks.map((b, i) => {
+      const w = [...view.dom.querySelectorAll(".page-gap")].find((x) => x.dataset.page === String(i))
+      return { bottom: w ? w.getBoundingClientRect().bottom - pmTop : null, start: layout.pages[i + 1].start }
+    })
   })
-})
-let pageStart = 0
+const landing = await readLanding()
 landing.forEach((l, i) => {
-  pageStart += Math.max(CONTENT_H - l.remaining, CONTENT_H) + BAND
   ok(
-    l.bottom != null && Math.abs(l.bottom - pageStart) <= 0.5,
-    `widget ${i} box bottom = page ${i + 2} content start (${pageStart.toFixed(1)})`,
-    l.bottom == null ? "widget missing" : `off by ${(l.bottom - pageStart).toFixed(2)}px`
+    l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5,
+    `widget ${i} box bottom = page ${i + 2} content start (${l.start.toFixed(1)})`,
+    l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`
   )
 })
 
@@ -384,14 +374,13 @@ console.log("— regression: an edit that strands a widget at a paragraph's end"
 // wrong until the re-run button forced a full re-measure. The fix: only
 // widget rects contained in the block's rect are subtracted.
 const stranded = await page.evaluate(() => {
-  const { view, key } = window.__pager
-  const s = key.getState(view.state)
+  const { view, layout } = window.__pager
   let idx = -1
-  s.breaks.forEach((b, i) => {
-    if (idx < 0 && view.state.doc.resolve(b.pos).parent.type.name === "paragraph") idx = i
+  layout.pages.forEach((p, i) => {
+    if (idx < 0 && p.opening === "inside") idx = i - 1
   })
   if (idx < 0) return { error: "no in-paragraph break" }
-  const b = s.breaks[idx]
+  const b = layout.breaks[idx]
   const $p = view.state.doc.resolve(b.pos)
   view.dispatch(view.state.tr.delete(b.pos, $p.end()))
   // The state the next pass will measure: the widget now overhangs
@@ -409,38 +398,23 @@ ok(
   "the widget's float overhangs the paragraph's rect (the poison state)"
 )
 await sleep(300) // the next pass measures the overhanging-widget state
-const strandedPass = await page.evaluate(() =>
-  window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
-)
+const strandedPass = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
 await page.evaluate(() => [...document.querySelectorAll(".panel-buttons button")][0].click())
 await sleep(800)
-const strandedRerun = await page.evaluate(() =>
-  window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
-)
+const strandedRerun = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
 ok(
   JSON.stringify(strandedPass) === JSON.stringify(strandedRerun),
   "the pass on the stranded-widget state agrees with a full re-run",
   `pass=${JSON.stringify(strandedPass)} rerun=${JSON.stringify(strandedRerun)}`
 )
 // And the geometry stays pixel-exact: every widget still ends exactly at the
-// next page's content start (the same arithmetic as the landing checks).
-const strandedLanding = await page.evaluate(() => {
-  const { view, key } = window.__pager
-  const pmTop = view.dom.getBoundingClientRect().top
-  return (key.getState(view.state)?.breaks ?? []).map((b, i) => {
-    const w = [...view.dom.querySelectorAll(".page-gap")].find(
-      (x) => x.dataset.page === String(i)
-    )
-    return { bottom: w ? w.getBoundingClientRect().bottom - pmTop : null, remaining: b.remaining }
-  })
-})
-let strandedStart = 0
+// next page's content start.
+const strandedLanding = await readLanding()
 strandedLanding.forEach((l, i) => {
-  strandedStart += Math.max(CONTENT_H - l.remaining, CONTENT_H) + BAND
   ok(
-    l.bottom != null && Math.abs(l.bottom - strandedStart) <= 0.5,
+    l.bottom != null && Math.abs(l.bottom - l.start) <= 0.5,
     `stranded-widget layout: widget ${i} ends at page ${i + 2} content start`,
-    l.bottom == null ? "widget missing" : `off by ${(l.bottom - strandedStart).toFixed(2)}px`
+    l.bottom == null ? "widget missing" : `off by ${(l.bottom - l.start).toFixed(2)}px`
   )
 })
 // Put the deleted text back so the suite ends near its old document.
@@ -456,25 +430,21 @@ console.log("— regression: a mark change re-measures the paragraph")
 // never ran: a paragraph made larger near a page's bottom overflowed into
 // the gap and the next page until something else triggered a pass.
 const markBefore = await page.evaluate(() => {
-  const { view, key } = window.__pager
-  const b = key.getState(view.state).breaks[0]
+  const { view, layout } = window.__pager
+  const b = layout.breaks[0]
   const $b = view.state.doc.resolve(b.pos)
   const off = $b.depth > 0 ? $b.before(1) : b.pos - view.state.doc.childBefore(b.pos).node.nodeSize
   const node = view.state.doc.nodeAt(off)
   view.dispatch(
     view.state.tr.addMark(off + 1, off + 1 + node.content.size, view.state.schema.marks.fontSize.create({ size: 28 }))
   )
-  return key.getState(view.state).breaks.map((b) => b.pos)
+  return layout.breaks.map((b) => b.pos)
 })
 await sleep(900)
-const markPass = await page.evaluate(() =>
-  window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
-)
+const markPass = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
 await page.evaluate(() => [...document.querySelectorAll(".panel-buttons button")][0].click())
 await sleep(800)
-const markRerun = await page.evaluate(() =>
-  window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos)
-)
+const markRerun = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
 ok(
   JSON.stringify(markPass) !== JSON.stringify(markBefore),
   "a 28px fontSize mark on the paragraph at the first break moved the breaks"
@@ -489,8 +459,8 @@ console.log("— page numbers are never part of a selection")
 // The number is drawn by CSS from data-num, so a selection that crosses a
 // page boundary (and anything copied from it) holds only document text.
 const acrossBreak = await page.evaluate(() => {
-  const { view, key } = window.__pager
-  const b = key.getState(view.state).breaks[0]
+  const { view, layout } = window.__pager
+  const b = layout.breaks[0]
   const TS = view.state.selection.constructor
   view.dispatch(view.state.tr.setSelection(TS.create(view.state.doc, b.pos - 40, b.pos + 40)))
   const dom = window.getSelection().toString().replace(/\s+/g, " ")

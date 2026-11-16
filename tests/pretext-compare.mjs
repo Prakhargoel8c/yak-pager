@@ -224,13 +224,13 @@ try {
   await page.evaluate(() => document.fonts.load('16px "Kruti Dev"'))
   await sleep(1200)
   const switched = await page.evaluate(() => ({
-    breaks: window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos),
+    breaks: window.__pager.layout.breaks.map((b) => b.pos),
     full: window.__pager.reflows.some((r) => r.fullRecompute),
   }))
   check(switched.full, "a font load runs a full re-measure")
   await report("Kruti Dev via the language menu")
   await open("?lang=hi")
-  const directHi = await page.evaluate(() => window.__pager.key.getState(window.__pager.view.state).breaks.map((b) => b.pos))
+  const directHi = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
   check(JSON.stringify(switched.breaks) === JSON.stringify(directHi), "same page breaks as loading ?lang=hi directly", `menu ${JSON.stringify(switched.breaks)} direct ${JSON.stringify(directHi)}`)
 
 
@@ -239,6 +239,62 @@ try {
   const family = await editorFont()
   check(/^"?Kruti Dev"?,/.test(family), "the document's font is Kruti Dev (doc attr)", family)
   await report("Kruti Dev seed")
+
+  console.log("— print preview of the Kruti Dev document")
+  // Approach C renders the document's pages in an iframe: it must use the
+  // document's font (and Georgia for the Latin runs), hold exactly the
+  // layout's pages with the text between the editor's breaks, and keep
+  // every line inside its sheet's writable area.
+  await page.$eval(".preview-c", (el) => el.click())
+  await page.waitForSelector("#print-modal:not(.pm-loading)")
+  const print = await page.evaluate(async () => {
+    const { view, layout } = window.__pager
+    const doc = view.state.doc
+    const frame = document.querySelector(".pm-frame").contentDocument
+    await frame.fonts.ready
+    const sheets = [...frame.querySelectorAll(".sheet")]
+    const bounds = [0, ...layout.breaks.map((b) => b.pos), doc.content.size]
+    const fonts = [...frame.fonts].map((f) => `${f.family}:${f.status}`)
+    const textMismatch = []
+    const outside = []
+    sheets.forEach((sheet, k) => {
+      const blocks = [...sheet.children].filter((el) => !el.classList.contains("page-num"))
+      const printed = blocks.map((el) => el.textContent).join("")
+      const expected = doc.textBetween(bounds[k], bounds[k + 1], "", "")
+      if (printed !== expected) textMismatch.push(k)
+      const cs = getComputedStyle(sheet)
+      const r = sheet.getBoundingClientRect()
+      const top = r.top + parseFloat(cs.paddingTop)
+      const bottom = r.bottom - parseFloat(cs.paddingBottom)
+      const walker = frame.createTreeWalker(sheet, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => (n.parentElement.closest(".page-num") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+      })
+      const range = frame.createRange()
+      while (walker.nextNode()) {
+        range.selectNodeContents(walker.currentNode)
+        for (const rr of range.getClientRects()) {
+          if (rr.height > 0 && (rr.top < top - 0.5 || rr.bottom > bottom + 0.5)) outside.push(`sheet ${k + 1}: ${walker.currentNode.data.slice(0, 20)}`)
+        }
+      }
+    })
+    const latin = frame.querySelector('.sheet span[style*="Georgia"]')
+    return {
+      sheets: sheets.length,
+      pages: layout.pages.length,
+      family: getComputedStyle(sheets[0]).fontFamily,
+      latinFamily: latin ? getComputedStyle(latin).fontFamily : null,
+      fonts,
+      textMismatch,
+      outside,
+    }
+  })
+  check(print.sheets === print.pages, "one printed sheet per layout page", `${print.sheets} sheets, ${print.pages} pages`)
+  check(/^"?Kruti Dev"?,/.test(print.family), "the print document is in Kruti Dev", print.family)
+  check(print.fonts.some((f) => /Kruti Dev:loaded/.test(f)), "Kruti Dev is loaded in the print document", print.fonts.join(" "))
+  check(print.latinFamily != null && /^Georgia,/.test(print.latinFamily), "a Latin run prints in Georgia", print.latinFamily ?? "no Latin run")
+  check(print.textMismatch.length === 0, "every sheet holds the text between the editor's breaks", `mismatch on sheets ${print.textMismatch.join(", ")}`)
+  check(print.outside.length === 0, "every printed line sits inside its sheet's writable area", print.outside.slice(0, 3).join("; "))
+  await page.keyboard.press("Escape")
 
   console.log("— font dropdown")
   const latin = await run(true)
@@ -332,9 +388,10 @@ try {
   await report("Malayalam in Gayathri")
 
   console.log("— Page margins")
-  // For each preset and a lopsided custom set: the column is 816 - left -
-  // right, every gap widget is band + push tall and lands the next page at
-  // its sheet's content top, and no line of text sits outside a page's
+  // For each preset and a lopsided custom set: the geometry follows the
+  // margins, the editor's column is the geometry's, every gap widget is
+  // band + push tall and lands the next page at its layout start, the
+  // sheets are painted there, and no line of text sits outside a page's
   // writable area. Then undo returns to 1in margins.
   const MARGINS = [
     ["narrow", { top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 }],
@@ -354,23 +411,23 @@ try {
       }
       await sleep(400)
       const errs = await page.evaluate((m) => {
-        const v = window.__pager.view
-        const st = window.__pager.key.getState(v.state)
+        const { view: v, layout, geometry: g } = window.__pager
         const stack = v.dom.parentElement
-        const [T, R, B, L] = [m.top, m.right, m.bottom, m.left].map((x) => x * 96)
-        const contentH = 1056 - T - B
-        const band = B + 24 + T
         const out = []
+        if (["top", "right", "bottom", "left"].some((side) => Math.abs(g[side] - m[side] * 96) > 0.01)) out.push(`geometry ${JSON.stringify(g)}`)
+        const { contentH } = g
         const cs = getComputedStyle(v.dom)
         const col = v.dom.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
-        if (Math.abs(col - (816 - L - R)) > 0.01) out.push(`column ${col}`)
-        const starts = stack.style.backgroundPosition.split(",").map((p) => parseFloat(p.trim().split(" ")[1]))
-        const origin = stack.getBoundingClientRect().top + T + 8
+        if (Math.abs(col - g.contentW) > 0.01) out.push(`column ${col}`)
+        const starts = layout.pages.map((p) => p.start)
+        const painted = stack.style.backgroundPosition.split(",").map((p) => parseFloat(p.trim().split(" ")[1]))
+        if (painted.join() !== starts.join()) out.push(`sheets painted at ${painted.join()}`)
+        const origin = v.dom.getBoundingClientRect().top
         const gaps = [...v.dom.querySelectorAll(".page-gap")].sort((a, b) => a.dataset.page - b.dataset.page)
-        if (gaps.length !== st.breaks.length) out.push(`${gaps.length} gaps for ${st.breaks.length} breaks`)
-        gaps.forEach((g, k) => {
-          const r = g.getBoundingClientRect()
-          if (Math.abs(r.height - (band + st.breaks[k].remaining)) > 0.5) out.push(`gap ${k} is ${r.height}px`)
+        if (gaps.length !== layout.breaks.length) out.push(`${gaps.length} gaps for ${layout.breaks.length} breaks`)
+        gaps.forEach((gap, k) => {
+          const r = gap.getBoundingClientRect()
+          if (Math.abs(r.height - (g.band + layout.breaks[k].remaining)) > 0.5) out.push(`gap ${k} is ${r.height}px`)
           if (Math.abs(r.bottom - origin - starts[k + 1]) > 0.5) out.push(`page ${k + 2} lands at ${r.bottom - origin}, not ${starts[k + 1]}`)
         })
         const range = document.createRange()

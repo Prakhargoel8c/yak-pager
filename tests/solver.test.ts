@@ -114,14 +114,13 @@ describe("solve with line splits", () => {
     expect(r.pageStarts).toEqual([0, PAGE + BAND])
   })
 
-  it("keeps as many lines as the widow rule allows (last fitting candidate wins)", () => {
-    // Same paragraph, room for 3 lines (72 of 96). Splitting after 3 lines
-    // would carry a single line — a widow — so the split lands one line
-    // earlier: 2 stay, 2 move.
+  it("keeps as many lines as fit (last fitting candidate wins)", () => {
+    // Same paragraph, room for 3 lines (72 of 96). The minimum carried is
+    // one line, so the split lands after line 3: 3 stay, 1 moves.
     const r = solve([{ pos: 0, height: 792 }, para(4, 24)], PAGE)
-    expect(r.breaks.map((b) => b.pos)).toEqual([101])
-    expect(r.breaks.map((b) => b.remaining)).toEqual([24])
-    expect(r.fills).toEqual([840, 48])
+    expect(r.breaks.map((b) => b.pos)).toEqual([102])
+    expect(r.breaks.map((b) => b.remaining)).toEqual([0])
+    expect(r.fills).toEqual([864, 24])
   })
 
   it("a paragraph taller than a full page splits even on an empty page", () => {
@@ -152,29 +151,33 @@ describe("solve with line splits", () => {
     expect(r.pageStarts).toEqual([0, 960 + 120])
   })
 
-  it("widow minimum: a 3-line paragraph never splits (2 would stay, only 1 would move)", () => {
+  it("widow minimum of one: a 3-line paragraph splits with a single line carried", () => {
+    // Room 64: the boundary after line 2 (48) fits, and one carried line
+    // satisfies MIN_CARRIED_LINES.
     const r = solve([{ pos: 0, height: 800 }, para(3, 24)], PAGE)
-    expect(r.breaks).toEqual([{ pos: 10, remaining: 64 }])
-    expect(r.fills).toEqual([800, 72])
+    expect(r.breaks).toEqual([{ pos: 101, remaining: 16 }])
+    expect(r.fills).toEqual([848, 24])
   })
 
-  it("orphan minimum: the first line boundary (candidate 0) is never used", () => {
-    // Room for 5 of 6 lines: the boundary after line 5 (candidate 4) fits
-    // geometrically but would carry a single line (widow), and the one
-    // after line 1 (candidate 0) would leave a single line behind
-    // (orphan) — the split lands after line 4: 4 stay, 2 move.
+  it("orphan minimum of one: a single line may stay behind", () => {
+    // Room for 5 of 6 lines: the boundary after line 5 (candidate 4) is the
+    // last that fits, so 5 stay and 1 moves.
     const r = solve([{ pos: 0, height: 744 }, para(6, 24)], PAGE)
-    expect(r.breaks.map((b) => b.pos)).toEqual([103])
-    expect(r.breaks.map((b) => b.remaining)).toEqual([24])
-    expect(r.fills).toEqual([840, 48])
+    expect(r.breaks.map((b) => b.pos)).toEqual([104])
+    expect(r.breaks.map((b) => b.remaining)).toEqual([0])
+    expect(r.fills).toEqual([864, 24])
+    // Room for only the first line (candidate 0): one line stays behind.
+    const r2 = solve([{ pos: 0, height: 800 }, para(4, 50)], PAGE)
+    expect(r2.breaks).toEqual([{ pos: 100, remaining: 14 }])
+    expect(r2.fills).toEqual([850, 150])
   })
 
   it("no candidate fits the remaining space → pushed whole (old behavior)", () => {
-    // Room 64, lines are 50 tall: no boundary fits, so the whole paragraph
+    // Room 64, lines are 70 tall: no boundary fits, so the whole paragraph
     // moves — the same as an atomic block.
-    const r = solve([{ pos: 0, height: 800 }, para(4, 50)], PAGE)
+    const r = solve([{ pos: 0, height: 800 }, para(4, 70)], PAGE)
     expect(r.breaks).toEqual([{ pos: 10, remaining: 64 }])
-    expect(r.fills).toEqual([800, 200])
+    expect(r.fills).toEqual([800, 280])
   })
 
   it("a carried remainder can split again with its own widow/orphan bounds", () => {

@@ -1,9 +1,8 @@
 /**
  * PRINT PREVIEW SPIKE — two ways to make what prints match what the live view
- * paginated. Both read the solver's break list out of the pagination plugin
- * (the same PaginationState.breaks the gap widgets render from) and cut the
- * document at exactly those positions, so neither one lets the print engine
- * decide where a page ends.
+ * paginated. Both cut the document at the layout's breaks (cutter.ts), the
+ * same breaks the gap widgets render from, so neither one lets the print
+ * engine decide where a page ends.
  *
  * Approach B — one continuous flow, page boxes from the print engine. The
  * whole document is one column; the first content of every page carries
@@ -11,69 +10,64 @@
  * @page. The print engine owns the page frame; we only mark the seams.
  *
  * Approach C — real page containers in the DOM. One <section class="sheet">
- * per solver page, filled by slicing the document at the break positions.
- * @page is full bleed; margins and page numbers are drawn by us, so the
- * on-screen preview and the printout are the same rendering.
+ * per page, filled with that page's pieces. @page is full bleed; margins and
+ * page numbers are drawn by us, so the on-screen preview and the printout
+ * are the same rendering.
  *
  * A paragraph whose break is inline becomes two real <p> elements, one per
  * page, in both approaches. That is allowed here because the print document
  * is a throwaway rendering built from the doc model: it never touches editor
  * state, history, or the Y.Doc, exactly like the decorations it mirrors.
  *
- * Geometry is the live view's geometry (src/layout.ts): 816x1056 sheets and
- * the document's margins. The content CSS is copied from the
- * editor's styles.css; any drift there re-wraps lines and breaks parity.
+ * Geometry is the layout's geometry; typography is generated from the same
+ * table as the editor's (typography.ts), in the document's font, with the
+ * editor's font faces copied over so Kruti Dev and Gayathri print as such.
  */
 import { DOMSerializer } from "prosemirror-model"
-import type { Node as PMNode } from "prosemirror-model"
 import type { EditorView } from "prosemirror-view"
-import { schema } from "./schema"
-import { paginationKey } from "./paginationPlugin"
-import { PX_PER_IN, SHEET_W, SHEET_H, marginsOf, pageGeometry } from "./layout"
+import { cutPages } from "./cutter"
+import { FONTS } from "./fonts"
+import { DESK_GAP, PX_PER_IN, SHEET_W, SHEET_H } from "./layout"
 import type { PageGeometry } from "./layout"
+import { paginationKey } from "./paginationPlugin"
+import { docFont } from "./toolbar"
+import { typographyCSS } from "./typography"
 
 /** Paper size as a CSS @page value, derived from the live geometry. */
 const PAGE_SIZE = `${SHEET_W / PX_PER_IN}in ${SHEET_H / PX_PER_IN}in`
 
-/**
- * The typography of the writable column, copied from `#paper .ProseMirror`
- * in styles.css. Emitted per approach with a scope selector, because B wraps
- * content in one .doc column while C scopes it inside every .sheet.
- */
-function typography(scope: string): string {
-  return `
-/* Content styles copied verbatim from the live editor. Any drift re-wraps
-   lines and breaks screen/print parity. */
-${scope} {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 16px;
-  line-height: 1.5;
-  color: #1f2328;
-  word-wrap: break-word;
-  white-space: pre-wrap;
-  -webkit-font-variant-ligatures: none;
-  font-variant-ligatures: none;
+/** The editor's @font-face rules, so the print document has the same fonts. */
+function fontFaceCSS(): string {
+  const out: string[] = []
+  for (const sheet of Array.from(document.styleSheets)) {
+    let rules: CSSRuleList
+    try {
+      rules = sheet.cssRules
+    } catch {
+      continue
+    }
+    for (const rule of Array.from(rules)) if (rule instanceof CSSFontFaceRule) out.push(rule.cssText)
+  }
+  return out.join("\n")
 }
-${scope} > * { margin: 0; }
-${scope} p { padding-bottom: 10px; }
-${scope} h1 { font-size: 28px; line-height: 1.25; padding: 18px 0 10px; font-weight: 700; }
-${scope} h2 { font-size: 22px; line-height: 1.3; padding: 16px 0 8px; font-weight: 700; }
-${scope} h3 { font-size: 18px; line-height: 1.35; padding: 12px 0 8px; font-weight: 600; }
-${scope} hr { border: none; border-top: 2px solid #c3c9d2; padding: 14px 0; }
-/* The explicit-break marker keeps its 17px box (1px border + 6px + 10px
-   padding) so page geometry is unchanged, but prints nothing. */
-${scope} [data-page-break] { visibility: hidden; border-top: 1px solid transparent; padding: 6px 0 10px; }
+
+/** The typography of the writable column, in the document's font. */
+function typography(scope: string, family: string): string {
+  return `${typographyCSS(scope, family)}
+/* The explicit-break marker keeps its box so page geometry is unchanged, but prints nothing. */
+${scope} [data-page-break] { visibility: hidden; }
 `
 }
 
-function printCSS(approach: "B" | "C", g: PageGeometry): string {
+function printCSS(approach: "B" | "C", g: PageGeometry, family: string): string {
   const margin = `${g.top}px ${g.right}px ${g.bottom}px ${g.left}px`
   if (approach === "B") {
     return `
+${fontFaceCSS()}
 /* Page boxes come entirely from the print engine: sheet size and the
    document's margins are @page, and the page number is a margin box (Chrome
    131+; on older browsers the numbers are simply absent). The writable
-   column is 816 - left - right, the same column the live editor writes in. */
+   column is the same column the live editor writes in. */
 @page {
   size: ${PAGE_SIZE};
   margin: ${margin};
@@ -85,16 +79,17 @@ function printCSS(approach: "B" | "C", g: PageGeometry): string {
   }
 }
 html, body { margin: 0; padding: 0; }
-${typography(".doc")}
+${typography(".doc", family)}
 /* The one instruction the print engine gets: a forced break before the first
    content of every page the solver carved. */
 .new-page { break-before: page; }
 `
   }
   return `
-/* The page boxes exist in the DOM: one section.sheet per solver page, sized
-   like the sheets the live view paints. @page is full bleed — margins and
-   page numbers are drawn by us, so preview and print share one rendering. */
+${fontFaceCSS()}
+/* The page boxes exist in the DOM: one section.sheet per page, sized like
+   the sheets the live view paints. @page is full bleed — margins and page
+   numbers are drawn by us, so preview and print share one rendering. */
 @page { size: ${PAGE_SIZE}; margin: 0; }
 html, body { margin: 0; padding: 0; }
 .sheet {
@@ -107,7 +102,7 @@ html, body { margin: 0; padding: 0; }
 }
 /* A break-after on the last sheet would add a trailing blank page. */
 .sheet:last-child { page-break-after: auto; }
-${typography(".sheet")}
+${typography(".sheet", family)}
 .page-num {
   position: absolute;
   left: 0;
@@ -123,81 +118,40 @@ ${typography(".sheet")}
 }
 /* Preview-only dressing: the gray desk and sheet shadows, never printed. */
 @media screen {
-  body { background: #d8dde5; padding: 24px 0; }
-  .sheet { margin: 0 auto 24px; box-shadow: 0 2px 8px rgba(31, 35, 40, 0.25); }
+  body { background: #d8dde5; padding: ${DESK_GAP}px 0; }
+  .sheet { margin: 0 auto ${DESK_GAP}px; box-shadow: 0 2px 8px rgba(31, 35, 40, 0.25); }
 }
 `
 }
 
 /**
- * Slice the document into pages at the solver's break positions. Returns one
- * array of block elements per page — the same pages the live view renders:
- * a break at a block's start begins a new page for that block, and a break
- * inside a paragraph cuts it into real halves, one per page.
- *
- * Elements are rendered from the doc model with the schema's own toDOM, so
- * marks, alignment attributes and hard breaks all serialize exactly as the
- * live view renders them.
+ * The pages as block elements, rendered from the doc model with the schema's
+ * own toDOM, so marks, alignment attributes and hard breaks all serialize
+ * exactly as the live view renders them.
  */
-function slicePages(view: EditorView): HTMLElement[][] {
-  const breaks = [...(paginationKey.getState(view.state)?.breaks ?? [])].sort((a, b) => a.pos - b.pos)
-  const breakPositions = new Set(breaks.map((b) => b.pos))
-  const serializer = DOMSerializer.fromSchema(schema)
-  const pages: HTMLElement[][] = [[]]
-  let cur = 0
-  const newPage = () => {
-    cur++
-    pages.push([])
-  }
-
-  view.state.doc.forEach((node: PMNode, offset: number) => {
-    // A break at this block's start: the block opens the next page.
-    if (breakPositions.has(offset)) newPage()
-
-    if (node.type.name !== "paragraph") {
-      pages[cur].push(serializer.serializeNode(node) as HTMLElement)
-      return
-    }
-
-    // Inline breaks inside this paragraph: cut positions relative to the
-    // paragraph's content start. A block break at `offset` was handled above.
-    const contentStart = offset + 1
-    const size = node.content.size
-    const cuts = breaks.map((b) => b.pos - contentStart).filter((cut) => cut > 0 && cut < size)
-
-    if (cuts.length === 0) {
-      pages[cur].push(serializer.serializeNode(node) as HTMLElement)
-      return
-    }
-
-    let from = 0
-    const stops = [...cuts, size]
-    stops.forEach((stop, i) => {
-      if (i > 0) newPage()
-      const half = node.copy(node.content.cut(from, stop))
-      const el = serializer.serializeNode(half) as HTMLElement
-      if (node.attrs.align === "justify" && i < stops.length - 1) {
-        // On screen, the line before a gap spacer is an interior line, so
-        // justify keeps it flush. In the print document the same line is the
-        // LAST line of a real paragraph, which browsers leave ragged unless
-        // told otherwise. Force it back — one rule per seam.
-        el.style.setProperty("text-align-last", "justify")
-      }
-      pages[cur].push(el)
-      from = stop
+function renderPages(view: EditorView): HTMLElement[][] {
+  const { layout } = paginationKey.getState(view.state)!
+  const serializer = DOMSerializer.fromSchema(view.state.schema)
+  return cutPages(view.state.doc, layout.breaks).map((page) =>
+    page.map((piece) => {
+      const el = serializer.serializeNode(piece.node) as HTMLElement
+      // On screen, the line before a gap widget is an interior line, so
+      // justify keeps it flush. In the print document the same line is the
+      // LAST line of a real paragraph, which browsers leave ragged unless
+      // told otherwise.
+      if (piece.continued && piece.node.attrs.align === "justify") el.style.setProperty("text-align-last", "justify")
+      return el
     })
-  })
-  return pages
+  )
 }
 
 /**
  * Assemble the print document. Blocks are concatenated with NO whitespace
- * between them: the content column is `white-space: pre-wrap` (copied from
- * the live editor, where ProseMirror emits no inter-block whitespace), so a
- * stray newline here would render as a phantom empty line.
+ * between them: the content column is `white-space: pre-wrap`, so a stray
+ * newline here would render as a phantom empty line.
  */
 function buildPrintHTML(view: EditorView, approach: "B" | "C"): string {
-  const pages = slicePages(view)
+  const pages = renderPages(view)
   const body =
     approach === "B"
       ? pages
@@ -219,12 +173,14 @@ function buildPrintHTML(view: EditorView, approach: "B" | "C"): string {
           })
           .join("")
   const wrapped = approach === "B" ? `<main class="doc">${body}</main>` : body
+  const { geometry } = paginationKey.getState(view.state)!.layout
+  const family = FONTS[docFont(view.state)].family
   return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>yak-pager print preview (${approach})</title>
-<style>${printCSS(approach, pageGeometry(marginsOf(view.state.doc.attrs.margins)))}</style>
+<style>${printCSS(approach, geometry, family)}</style>
 </head>
 <body>${wrapped}</body>
 </html>
@@ -285,7 +241,7 @@ function previewC(view: EditorView): void {
   const head = document.createElement("div")
   head.className = "pm-head"
   const title = document.createElement("span")
-  title.textContent = "Print preview — approach C: one <section> per solver page"
+  title.textContent = "Print preview — approach C: one <section> per page"
   const actions = document.createElement("div")
   actions.className = "pm-actions"
   const printBtn = document.createElement("button")
@@ -348,13 +304,14 @@ export function buildPrintPreviewButtons(view: EditorView, mount: HTMLElement): 
   const b = document.createElement("button")
   b.textContent = "Preview B"
   b.title =
-    "Approach B: one continuous flow with break-before: page at the solver's break positions; page boxes, margins and numbers come from @page. Opens the browser print dialog."
+    "Approach B: one continuous flow with break-before: page at the layout's break positions; page boxes, margins and numbers come from @page. Opens the browser print dialog."
   b.onclick = () => printB(view)
 
   const c = document.createElement("button")
   c.textContent = "Preview C"
+  c.className = "preview-c"
   c.title =
-    "Approach C: real page containers (<section> per solver page) filled by slicing the document; margins and numbers are DOM. Opens an in-app preview whose own document prints."
+    "Approach C: real page containers (<section> per page) filled by cutting the document; margins and numbers are DOM. Opens an in-app preview whose own document prints."
   c.onclick = () => previewC(view)
 
   mount.append(b, c)

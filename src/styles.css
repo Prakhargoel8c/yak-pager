@@ -1,10 +1,8 @@
 /*
- * Page geometry must match src/layout.ts:
- *   sheet 816x1056 (8.5x11in @96dpi), desk gap 24px, SVG tile 832x1072
- *   (8px bleed). Margins come from the document (--margin-* on
- *   .paper-stack, 96px by default): content height 1056 - top - bottom,
- *   band bottom + 24 + top.
- * .paper-stack's padding-top is margin-top + BLEED so that background
+ * Page geometry is written by applyGeometry (src/layout.ts) as CSS variables
+ * on .paper-stack: --sheet-w, --bleed, --tile-w, --tile-h, --margin-*,
+ * --content-h and --band. Nothing here repeats a number from layout.ts.
+ * .paper-stack's padding-top is margin-top + bleed so that background
  * layer k's y-position equals the solver's pageStarts[k] exactly.
  */
 :root {
@@ -118,46 +116,28 @@ body {
 }
 
 .paper-stack {
-  /* Content box = one 816px sheet, so the editor's 96px side padding leaves
-     the same 624px column print uses. The 8px side padding is the tile's
-     bleed: the 832px tile is painted from the padding edge, so its sheet
-     starts exactly at the content edge. */
-  width: 816px;
+  /* Content box = one sheet, so the editor's side padding leaves the same
+     column print uses. The side padding is the tile's bleed: the tile is
+     painted from the padding edge, so its sheet starts exactly at the
+     content edge. */
+  width: var(--sheet-w);
   margin: 24px auto;
-  /* Page margins (layout.ts applyGeometry sets them from the document's
-     margins attr; these are the 1in defaults). */
-  --margin-top: 96px;
-  --margin-right: 96px;
-  --margin-bottom: 96px;
-  --margin-left: 96px;
-  --content-h: 864px;
-  padding: calc(var(--margin-top) + 8px) 8px 0; /* top = margin + BLEED; JS sets padding-bottom */
+  padding: calc(var(--margin-top) + var(--bleed)) var(--bleed) 0; /* JS sets padding-bottom */
   box-sizing: content-box;
   background-repeat: no-repeat;
-  background-size: 832px 1072px; /* the SVG tile */
+  background-size: var(--tile-w) var(--tile-h);
   background-color: transparent;
 }
 
-/* ProseMirror base behavior we'd otherwise get from prosemirror.css */
+/* The editor spans the full sheet; its horizontal padding is the page's
+   left and right margin. NO vertical padding, NO border, NO margins on
+   blocks — the flow must start exactly at the first page's content origin,
+   and block spacing must live inside the measured boxes (padding), where
+   margin collapsing cannot touch it. Block typography is generated from
+   src/typography.ts (main.ts installs it). */
 #paper .ProseMirror {
   position: relative;
-  word-wrap: break-word;
-  white-space: pre-wrap;
-  -webkit-font-variant-ligatures: none;
-  font-variant-ligatures: none;
   outline: none;
-}
-
-/* The editor spans the full 816px sheet; its horizontal padding is the
-   page's left and right margin. NO vertical padding, NO border, NO margins on blocks — the
-   flow must start exactly at the first page's content origin, and block
-   spacing must live inside the measured boxes (padding), where margin
-   collapsing cannot touch it. */
-#paper .ProseMirror {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 16px;
-  line-height: 1.5;
-  color: var(--ink);
   padding: 0 var(--margin-right) 0 var(--margin-left);
   min-height: var(--content-h);
   caret-color: var(--accent);
@@ -171,46 +151,7 @@ body {
   src: url("/fonts/krutidev-010-regular.ttf") format("truetype");
 }
 
-#paper .ProseMirror > * {
-  margin: 0;
-}
-
-#paper .ProseMirror p {
-  padding-bottom: 10px;
-}
-
-#paper .ProseMirror h1 {
-  font-size: 28px;
-  line-height: 1.25;
-  padding: 18px 0 10px;
-  font-weight: 700;
-}
-#paper .ProseMirror h2 {
-  font-size: 22px;
-  line-height: 1.3;
-  padding: 16px 0 8px;
-  font-weight: 700;
-}
-#paper .ProseMirror h3 {
-  font-size: 18px;
-  line-height: 1.35;
-  padding: 12px 0 8px;
-  font-weight: 600;
-}
-
-#paper .ProseMirror hr {
-  border: none;
-  border-top: 2px solid #c3c9d2;
-  padding: 14px 0;
-}
-
-/* Explicit (authorial) page break node */
-#paper .ProseMirror [data-page-break] {
-  border-top: 1px dashed #c5221f;
-  padding: 6px 0 10px;
-  position: relative;
-  user-select: none;
-}
+/* Explicit (authorial) page break node: its label */
 #paper .ProseMirror [data-page-break]::after {
   content: "explicit page break";
   position: absolute;
@@ -228,7 +169,7 @@ body {
 
 /* ---------- the gap widget band ----------
    The widget IS the inter-page space: its box height is the band (bottom
-   margin + 24px desk + top margin, 216px at 1in margins) plus
+   margin + desk gap + top margin, --band from applyGeometry) plus
    --push (the ragged space left on the page above), so the block after it
    flows to the next page's content start with NO margin of its own —
    pagination never touches block DOM. Its absolutely positioned children
@@ -237,7 +178,7 @@ body {
    the break moves* — only its insertion position does. */
 .page-gap {
   position: relative;
-  height: calc(var(--margin-bottom) + 24px + var(--margin-top) + var(--push, 0px));
+  height: calc(var(--band) + var(--push, 0px));
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
@@ -274,7 +215,7 @@ body {
    (verified by tests/spike.mjs; the inline-block alternative fails this by
    +10px). The browser aligns the float's top edge with the carried line's
    line-box top, which is the quantity MEASURE reports as the split
-   candidate's height (measureSplitCandidates in paginationPlugin.ts). */
+   candidate's height (measureSplitCandidates in measure.ts). */
 #paper .ProseMirror p .page-gap {
   float: left;
   clear: both;
