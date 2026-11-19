@@ -2,7 +2,8 @@
  * Column widths and the table's DOM. Widths are whole pixels so Pretext
  * breaks a cell's lines where the browser does: a resized column keeps its
  * colwidth, the others share the rest rounded down, the last taking the
- * remainder. The CSS computes the same numbers from --content-w.
+ * remainder. The CSS computes the same numbers from --list-w inside a list
+ * (typography.ts), else --content-w.
  */
 import type { Node as PMNode } from "prosemirror-model"
 import type { DOMOutputSpec } from "prosemirror-model"
@@ -34,8 +35,8 @@ function columnCSS(cols: (number | null)[]): { table: string; cols: string[] } {
   const set = cols.reduce<number>((s, c) => s + (c ?? 0), 0)
   const free = cols.filter((c) => c == null).length
   if (free === 0) return { table: `width: ${set}px`, cols: cols.map((c) => `${c}px`) }
-  const share = `max(${TABLE.minCol}px, round(down, calc((var(--content-w) - ${set}px) / ${free}), 1px))`
-  const last = `max(${TABLE.minCol}px, calc(var(--content-w) - ${set}px - ${free - 1} * var(--share)))`
+  const share = `max(${TABLE.minCol}px, round(down, calc((var(--list-w, var(--content-w)) - ${set}px) / ${free}), 1px))`
+  const last = `max(${TABLE.minCol}px, calc(var(--list-w, var(--content-w)) - ${set}px - ${free - 1} * var(--share)))`
   let seen = 0
   return {
     table: `--share: ${share}; --last: ${last}; width: calc(${set}px + ${free - 1} * var(--share) + var(--last))`,

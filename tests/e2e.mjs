@@ -56,6 +56,12 @@ const opsSince = (pass) =>
     }
     return sum
   }, pass)
+/** Per break, whether it falls between table rows: the widget is a <tr> there and a <div> elsewhere. */
+const breakKinds = () =>
+  page.evaluate(() => {
+    const { view, layout } = window.__pager
+    return layout.breaks.map((b) => view.state.doc.resolve(b.pos).parent.type.name === "table").join()
+  })
 /** Every widget's box must end exactly at the next page's content start. */
 const checkLanding = async (prefix) => {
   const landing = await page.evaluate(() => {
@@ -413,7 +419,7 @@ const acrossBreak = await page.evaluate(() => {
 ok(acrossBreak.numbers === "", "page numbers have no text in the DOM", JSON.stringify(acrossBreak.numbers))
 // From the first space to the last: the ±40 ends can fall inside a grapheme
 // cluster (a Malayalam vowel sign), which the selection snaps to whole.
-const words = (t) => t.slice(t.indexOf(" "), t.lastIndexOf(" ")).trim()
+const words = (t) => ((t = t.trim()), t.slice(t.indexOf(" "), t.lastIndexOf(" ")).trim())
 ok(
   words(acrossBreak.dom) === words(acrossBreak.doc),
   "a selection across the first break selects only the document's text",
@@ -438,9 +444,15 @@ if ((await rowBreak()) >= 0) {
     view.focus()
   }, k)
   const passBeforeRow = await lastPass()
+  const kindsBeforeRow = await breakKinds()
   const breakBefore = await page.evaluate((k) => window.__pager.layout.breaks[k].pos, k)
-  await page.keyboard.type(" and more words typed into a table cell until its row no longer fits on the page".repeat(2))
-  await sleep(600)
+  // Until the break is before the cursor: the row being typed in moved to the next page.
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.type(" and more words typed into a table cell until its row no longer fits on the page".repeat(2))
+    await sleep(400)
+    const moved = await page.evaluate((k) => window.__pager.layout.breaks[k].pos < window.__pager.view.state.selection.from, k)
+    if (moved) break
+  }
   const rowOps = await opsSince(passBeforeRow)
   const rowState = await page.evaluate((k) => {
     const { view, layout } = window.__pager
@@ -450,7 +462,8 @@ if ((await rowBreak()) >= 0) {
   }, k)
   ok(rowState.pos < breakBefore && rowState.inTable, "the grown row moved to the next page whole", `break ${breakBefore} → ${rowState.pos}`)
   ok(rowState.tag === "TR" && rowState.before, "the gap is a table row right before the moved row")
-  ok((rowOps.other ?? 0) === 0 && (rowOps.create ?? 0) + (rowOps.remove ?? 0) === 0, "typing in a table: the reflow only reused widgets", JSON.stringify(rowOps))
+  const rowKindsKept = (await breakKinds()) === kindsBeforeRow
+  ok((rowOps.other ?? 0) === 0 && (!rowKindsKept || (rowOps.create ?? 0) + (rowOps.remove ?? 0) === 0), `typing in a table: ${rowKindsKept ? "the reflow only reused widgets" : "widgets replaced only where a break changed kind"}`, JSON.stringify(rowOps))
   await checkLanding("table layout: ")
 }
 
@@ -469,9 +482,10 @@ if (nestedItem != null) {
     view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, at)))
     view.focus()
   }, nestedItem)
-  const before = { pass: await lastPass(), breaks: await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos)) }
+  const before = { pass: await lastPass(), breaks: await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos)), kinds: await breakKinds() }
   await page.keyboard.press("Tab")
   await sleep(500)
+  const sunkKinds = await breakKinds()
   const sunk = await page.evaluate(() => window.__pager.layout.breaks.map((b) => [b.pos, b.remaining]))
   await page.evaluate(() => document.querySelector(".panel-buttons button").click())
   await sleep(500)
@@ -484,8 +498,60 @@ if (nestedItem != null) {
   const lifted = await page.evaluate(() => window.__pager.layout.breaks.map((b) => b.pos))
   ok(JSON.stringify(sunk) === JSON.stringify(sunkRerun), "after Tab, the layout matches a full re-run", `pass ${JSON.stringify(sunk)} rerun ${JSON.stringify(sunkRerun)}`)
   ok(JSON.stringify(lifted) === JSON.stringify(before.breaks), "Shift-Tab put them back")
-  ok((listOps.other ?? 0) === 0 && (listOps.create ?? 0) + (listOps.remove ?? 0) === 0, "indenting a list item: the reflow only reused widgets", JSON.stringify(listOps))
+  const listKindsKept = sunkKinds === before.kinds
+  ok((listOps.other ?? 0) === 0 && (!listKindsKept || (listOps.create ?? 0) + (listOps.remove ?? 0) === 0), `indenting a list item: ${listKindsKept ? "the reflow only reused widgets" : "widgets replaced only where a break changed kind"}`, JSON.stringify(listOps))
   await checkLanding("list layout: ")
+}
+
+/** Inside the first cell of the first table that sits in a list item, or null. */
+const cellInListTable = await page.evaluate(() => {
+  const { doc } = window.__pager.view.state
+  let at = null
+  doc.descendants((n, pos) => {
+    if (at !== null) return false
+    if (n.type.name === "table" && doc.resolve(pos).parent.type.name === "listItem") at = pos + 4
+  })
+  return at
+})
+if (cellInListTable != null) {
+  console.log("— tables in lists")
+  const overflow = await page.evaluate(() => {
+    const ed = window.__pager.view.dom
+    const right = ed.getBoundingClientRect().right - parseFloat(getComputedStyle(ed).paddingRight)
+    return [...ed.querySelectorAll("li .tableWrapper > table")].map((t) => {
+      const li = t.closest("li").getBoundingClientRect()
+      return { past: t.getBoundingClientRect().right - right, width: t.getBoundingClientRect().width - li.width }
+    })
+  })
+  ok(overflow.length > 0 && overflow.every((o) => o.past <= 0.5 && Math.abs(o.width) <= 0.5), `${overflow.length} tables in list items fill their item, inside the column`, JSON.stringify(overflow.filter((o) => o.past > 0.5 || Math.abs(o.width) > 0.5).slice(0, 3)))
+
+  const rerunMatches = async (label) => {
+    const live = await page.evaluate(() => window.__pager.layout.breaks.map((b) => [b.pos, b.remaining]))
+    await page.evaluate(() => document.querySelector(".panel-buttons button").click())
+    await sleep(500)
+    const rerun = await page.evaluate(() => window.__pager.layout.breaks.map((b) => [b.pos, b.remaining]))
+    ok(JSON.stringify(live) === JSON.stringify(rerun), `${label}: the layout matches a full re-run`, `pass ${JSON.stringify(live)} rerun ${JSON.stringify(rerun)}`)
+  }
+  const cursorAt = (pos) =>
+    page.evaluate((pos) => {
+      const { view } = window.__pager
+      view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, pos)))
+      view.focus()
+    }, pos)
+  await cursorAt(cellInListTable)
+  const passBeforeNested = await lastPass()
+  await page.keyboard.press("End")
+  const passBeforeTyping = await lastPass()
+  const kindsBefore = await breakKinds()
+  await page.keyboard.type(" more words typed into a table inside a list item".repeat(3))
+  await sleep(600)
+  const typedOps = await opsSince(passBeforeTyping)
+  const sameKinds = (await breakKinds()) === kindsBefore
+  ok((typedOps.other ?? 0) === 0 && (!sameKinds || (typedOps.create ?? 0) + (typedOps.remove ?? 0) === 0), `typing in a table in a list: ${sameKinds ? "the reflow only reused widgets" : "widgets replaced only where a break changed kind"}`, JSON.stringify(typedOps))
+  await rerunMatches("after typing in a table in a list")
+  await checkLanding("nested layout: ")
+  const opsAll = await opsSince(passBeforeNested)
+  ok((opsAll.other ?? 0) === 0, "no unexpected DOM mutations across the nested edits", JSON.stringify(opsAll))
 }
 
 console.log("— doc.toJSON() carries no page nodes")

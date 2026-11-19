@@ -48,6 +48,13 @@ export const TEXT_FLOW =
 const block = (s: BlockStyle) =>
   `font-size: ${s.size}px; line-height: ${s.lineHeight}; padding: ${s.padTop}px 0 ${s.padBottom}px; font-weight: ${s.weight};`
 
+/** --list-w: the column less one LIST.indent per enclosing list, for the tables inside (the deeper rule is the more specific). */
+const listWidths = (scope: string) =>
+  Array.from({ length: 8 }, (_, i) => {
+    const lists = Array.from({ length: i + 1 }, () => ":is(ul, ol)").join(" ")
+    return `${scope} ${lists} { --list-w: calc(var(--content-w) - ${(i + 1) * LIST.indent}px); }`
+  }).join("\n")
+
 export function typographyCSS(scope: string, family: string): string {
   return `
 ${scope} { font-family: ${family}; font-size: ${PARAGRAPH.size}px; line-height: ${PARAGRAPH.lineHeight}; color: ${INK}; ${TEXT_FLOW}; }
@@ -58,12 +65,13 @@ ${scope} h2 { ${block(HEADINGS[2])} }
 ${scope} h3 { ${block(HEADINGS[3])} }
 ${scope} hr { border: none; border-top: 2px solid #c3c9d2; padding: 14px 0; }
 ${scope} [data-page-break] { border-top: 1px dashed #c5221f; padding: 6px 0 10px; position: relative; user-select: none; }
-${scope} .tableWrapper { padding-bottom: ${TABLE.tail}px; }
+${scope} .tableWrapper { padding-bottom: ${TABLE.tail}px; clear: both; }
 ${scope} table { border-collapse: separate; border-spacing: 0; table-layout: fixed; border-top: ${TABLE.border}px solid ${TABLE.line}; }
 ${scope} td, ${scope} th { box-sizing: border-box; padding: ${TABLE.padY}px ${TABLE.padX}px; border: 0 solid ${TABLE.line}; border-width: 0 ${TABLE.border}px ${TABLE.border}px 0; vertical-align: top; text-align: start; font-weight: 400; position: relative; }
 ${scope} th { font-weight: 700; background: ${TABLE.head}; }
 ${scope} tr > :first-child { border-left-width: ${TABLE.border}px; }
 ${scope} ul, ${scope} ol { margin: 0; padding: 0 0 0 ${LIST.indent}px; }
+${listWidths(scope)}
 ${scope} li, ${scope} li > * { margin: 0; }
 ${scope} li { padding: 0; }
 ${scope} .li-continued { list-style-type: none; }
