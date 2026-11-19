@@ -66,6 +66,7 @@ export const LANGUAGES: Record<string, { label: string; text: SeedText; font: Fo
   kn: { label: "ಕನ್ನಡ", text: kn as SeedText, font: "georgia" },
   table: { label: "English + tables", text: en as SeedText, font: "georgia" },
   list: { label: "English + lists", text: en as SeedText, font: "georgia" },
+  nested: { label: "Tables in lists", text: en as SeedText, font: "georgia" },
 }
 export type Language = keyof typeof LANGUAGES
 
@@ -76,6 +77,7 @@ export function buildSeedDoc(lang: Language = "en"): Node {
   if (lang === "mixed") return buildMixedDoc()
   if (lang === "table") return buildTableDoc()
   if (lang === "list") return buildListDoc()
+  if (lang === "nested") return buildNestedDoc()
   const t = LANGUAGES[lang].text
   const children: Node[] = []
 
@@ -211,5 +213,39 @@ function buildListDoc(): Node {
     else if (i === 2) children.push(next(), ol([item(next()), item(next(), deep(3))], 5))
     else children.push(ol([item(next(), deep(2))]))
   })
+  return schema.nodes.doc.create({ font: "georgia" }, children)
+}
+
+/** Tables inside list items, up to three lists deep. */
+function buildNestedDoc(): Node {
+  const e = en as SeedText
+  const paras = [...e.sections.flatMap((s) => s.paras), ...e.afterBreak.paras, ...e.afterBreak.subParas]
+  let k = 0
+  const next = (words = 0) => {
+    const p = paras[k++ % paras.length]
+    return para(words ? p.split(" ").slice(0, words).join(" ") : p)
+  }
+  const cell = (...blocks: Node[]) => schema.nodes.tableCell.create(null, blocks)
+  const th = (str: string) => schema.nodes.tableHeader.create(null, para(str))
+  const row = (...cells: Node[]) => schema.nodes.tableRow.create(null, cells)
+  const table = (...rows: Node[]) => schema.nodes.table.create(null, rows)
+  const small = (n: number) =>
+    table(row(th("Item"), th("Detail")), ...Array.from({ length: n }, (_, i) => row(cell(next(2)), cell(next(6 + ((i * 5) % 20))))))
+
+  const listOfTables = (level: number): Node =>
+    (level % 2 ? ul : ol)([
+      item(next(), small(3), next(30)),
+      item(next(), ...(level < 2 ? [listOfTables(level + 1)] : [small(2)])),
+      item(next(20), small(4)),
+    ])
+
+  const children: Node[] = [heading(1, e.title), para(e.intro.join("")), schema.nodes.paragraph.create({ align: "justify" }, text(e.justified))]
+  e.sections.forEach((section, i) => {
+    children.push(heading(2, section.title), next())
+    if (i === 0) children.push(listOfTables(0))
+    else if (i === 1) children.push(ol([item(next(), small(6)), item(next(20), small(2))]))
+    else children.push(next())
+  })
+  children.push(schema.nodes.pageBreak.create(), heading(2, e.afterBreak.title), para(e.afterBreak.paras[0]))
   return schema.nodes.doc.create({ font: "georgia" }, children)
 }
