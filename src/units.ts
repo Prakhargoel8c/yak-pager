@@ -56,7 +56,7 @@ function walk(parent: PMNode, start: number, inset: number, lead: number | null,
       })
       return
     }
-    if (node.type.name === "table" && inset === 0 && !hasRowspan(node)) {
+    if (node.type.name === "table" && !hasRowspan(node)) {
       const last = node.childCount - 1
       node.forEach((row, rowOffset, i) => {
         const rowAt = at + 1 + rowOffset

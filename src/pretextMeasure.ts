@@ -181,10 +181,11 @@ interface Line {
 }
 
 export function measureWithPretext(unit: Unit, column: Column): MeasuredBlock | null {
-  if (unit.row) return measureRow(unit.node, unit.row.table, column)
+  const inner = unit.inset ? { ...column, width: column.width - unit.inset } : column
+  if (unit.row) return measureRow(unit.node, unit.row.table, inner)
   const style = blockStyle(unit.node)
   if (!style) return null
-  const m = measureText(unit.node, style, unit.inset ? { ...column, width: column.width - unit.inset } : column)
+  const m = measureText(unit.node, style, inner)
   return m && { height: m.height, splitCandidates: unit.kind === "splittable" && m.splits.length > 0 ? m.splits : null }
 }
 

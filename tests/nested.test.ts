@@ -7,9 +7,8 @@ import { runPass } from "../src/pass"
 import { pageGeometry, DEFAULT_MARGINS } from "../src/layout"
 import type { MeasuredBlock } from "../src/measure"
 import type { Measurer } from "../src/measurers"
-import { measureWithPretext } from "../src/pretextMeasure"
 import { buildSeedDoc } from "../src/seed"
-import { LIST } from "../src/typography"
+import { LIST, TABLE } from "../src/typography"
 
 const { doc, paragraph, bulletList, orderedList, listItem, table, tableRow, tableCell } = schema.nodes
 const p = (s = "") => paragraph.create(null, s ? schema.text(s) : [])
@@ -41,55 +40,51 @@ describe("a table inside a list item", () => {
   const t = grid(["h1", "h2"], ["a", "b"], ["c", "d"])
   const d = doc.create(null, [p("intro"), ol(li(p("one")), li(p("two"), t, p("after"))), p("outro")])
   const tablePos = posOf(d, table)
+  const rows = units(d).filter((u) => u.row)
 
-  it("is one atomic unit, indented one level, starting where the table is", () => {
-    const u = units(d)
-    expect(u.map((x) => x.node.textContent)).toEqual(["intro", "one", "two", "h1h2abcd", "after", "outro"])
-    const unit = u[3]
-    expect(unit.node.type).toBe(table)
-    expect(unit.kind).toBe("atomic")
-    expect(unit.row).toBeUndefined()
-    expect(unit.inset).toBe(LIST.indent)
-    expect(unit.pos).toBe(tablePos)
-    expect(unit.at).toBe(tablePos)
-    expect(unit.extra).toBe(0)
+  it("is placed row by row, indented one level, the first row starting where the table is", () => {
+    expect(units(d).map((x) => x.node.textContent)).toEqual(["intro", "one", "two", "h1h2", "ab", "cd", "after", "outro"])
+    expect(rows.every((u) => u.kind === "atomic" && u.inset === LIST.indent && u.row!.table === t)).toBe(true)
+    expect(rows[0].pos).toBe(tablePos)
+    expect(rows[0].at).toBe(tablePos + 1)
+    expect(rows.map((u) => u.extra)).toEqual([TABLE.border, 0, TABLE.tail])
   })
 
   it("is indented once per enclosing list", () => {
     const deep = doc.create(null, [ul(li(p("a"), ol(li(p("b"), ul(li(p("c"), t))))))])
-    const unit = units(deep).find((u) => u.node.type === table)!
-    expect(unit.inset).toBe(3 * LIST.indent)
+    expect(units(deep).filter((u) => u.row).map((u) => u.inset)).toEqual([72, 72, 72])
   })
 
-  it("Pretext declines it, so the DOM measures it", () => {
-    const unit = units(d).find((u) => u.node.type === table)!
-    expect(measureWithPretext(unit, { width: 624, family: "Georgia" })).toBeNull()
+  it("breaks between its rows when one does not fit, the gap a row inside the item", () => {
+    const { layout } = run(d, { intro: block(700), one: block(24), two: block(24), h1h2: block(40), ab: block(100), cd: block(40), after: block(24) })
+    // 700 + 24 + 24 + (40 + 1) = 789; the next row (100) does not fit in 864.
+    expect(layout.breaks).toEqual([{ pos: rows[1].pos, remaining: 864 - 789 }])
+    expect(breakSite(d, rows[1].pos)).toEqual({ inset: LIST.indent, columns: 2 })
+    expect(layout.pages[1]).toMatchObject({ fill: 100 + 40 + TABLE.tail + 24, opening: "between" })
   })
 
-  it("moves whole when it does not fit, its break inside the item, before the table", () => {
-    const { layout } = run(d, { intro: block(700), one: block(24), two: block(24), h1h2abcd: block(200), after: block(24) })
-    expect(layout.breaks.map((b) => b.pos)).toEqual([tablePos])
+  it("moves with its first row: the break falls before the table, inside the item", () => {
+    const { layout } = run(d, { intro: block(800), one: block(24), two: block(24), h1h2: block(40), ab: block(40) })
+    expect(layout.breaks).toEqual([{ pos: tablePos, remaining: 864 - 848 }])
     expect(d.resolve(tablePos).parent.type).toBe(listItem)
     expect(breakSite(d, tablePos)).toEqual({ inset: LIST.indent, columns: 0 })
-    expect(layout.pages[1].opening).toBe("between")
-    expect(layout.pages[1].fill).toBe(200 + 24 + 0)
   })
 
   it("stays on the page when it fits", () => {
-    const { layout } = run(d, { intro: block(500), one: block(24), two: block(24), h1h2abcd: block(200), after: block(24) })
+    const { layout } = run(d, { intro: block(500), one: block(24), two: block(24), h1h2: block(40), ab: block(40), cd: block(40), after: block(24) })
     expect(layout.breaks).toEqual([])
   })
 
-  it("prints whole on the next page, inside its reopened list and item, the numbering kept", () => {
-    const pages = cutPages(d, [{ pos: tablePos, remaining: 0 }])
-    expect(text(pages)).toEqual([["intro", "onetwo"], ["h1h2abcdafter", "outro"]])
+  it("prints cut between rows, the list, item and table reopened, the numbering kept", () => {
+    const pages = cutPages(d, [{ pos: rows[1].pos, remaining: 0 }])
+    expect(text(pages)).toEqual([["intro", "onetwoh1h2"], ["abcdafter", "outro"]])
+    expect(pages[0][1].continued).toBe(true)
     const first = pages[1][0]
     expect(first.node.type).toBe(orderedList)
     expect(first.node.attrs.start).toBe(2)
-    expect(first.continuation).toBe(2)
+    expect(first.continuation).toBe(3)
     expect(first.node.firstChild!.firstChild!.type).toBe(table)
-    expect(first.node.firstChild!.firstChild!.childCount).toBe(3)
-    expect(pages[0][1].continued).toBe(true)
+    expect(first.node.firstChild!.firstChild!.childCount).toBe(2)
   })
 })
 
@@ -97,7 +92,7 @@ describe("the nested seed", () => {
   const d = buildSeedDoc("nested")
 
   it("holds tables in list items up to three lists deep", () => {
-    const insets = units(d).filter((u) => u.node.type === table).map((u) => u.inset)
+    const insets = units(d).filter((u) => u.row).map((u) => u.inset)
     expect(Math.max(...insets)).toBe(3 * LIST.indent)
   })
 
