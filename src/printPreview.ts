@@ -108,16 +108,16 @@ function renderPages(view: EditorView): HTMLElement[][] {
       if (piece.continued) {
         let [node, dom] = [piece.node, el]
         while (isList(node) || node.type.name === "listItem") [node, dom] = [node.lastChild!, dom.lastElementChild as HTMLElement]
-        if (node.attrs.align === "justify") dom.style.setProperty("text-align-last", "justify")
+        if (node.type.name === "table") dom.classList.add("table-continues")
+        else if (node.attrs.align === "justify") dom.style.setProperty("text-align-last", "justify")
       }
-      if (piece.continued && piece.node.type.name === "table") el.classList.add("table-continues")
-      if (piece.continuation && piece.node.type.name === "table") el.classList.add("table-continued")
       // An item cut in two keeps its marker on the page where it starts.
       let [node, dom, depth] = [piece.node, el, 1]
       while (depth < piece.continuation && (isList(node) || node.type.name === "listItem")) {
         if (node.type.name === "listItem") dom.classList.add("li-continued")
         ;[node, dom, depth] = [node.firstChild!, dom.firstElementChild as HTMLElement, depth + 1]
       }
+      if (piece.continuation >= depth && node.type.name === "table") dom.classList.add("table-continued")
       return el
     })
   )

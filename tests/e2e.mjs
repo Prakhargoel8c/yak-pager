@@ -554,6 +554,73 @@ if (cellInListTable != null) {
   ok((opsAll.other ?? 0) === 0, "no unexpected DOM mutations across the nested edits", JSON.stringify(opsAll))
 }
 
+console.log("— a table in a list item, taller than a page")
+{
+  const breaksNow = () => page.evaluate(() => window.__pager.layout.breaks.map((b) => [b.pos, b.remaining]))
+  const before = await breaksNow()
+  const at = await page.evaluate(() => {
+    const { view } = window.__pager
+    const para = (text) => ({ type: "paragraph", content: [{ type: "text", text }] })
+    const words = "a long cell that wraps onto several lines so that the rows together are much taller than one page"
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      type: "tableRow",
+      content: [`row ${i + 1}`, `${words} (${i + 1})`].map((s) => ({ type: "tableCell", content: [para(s)] })),
+    }))
+    const list = { type: "orderedList", content: [{ type: "listItem", content: [para("an item holding a tall table"), { type: "table", content: rows }] }] }
+    const at = view.state.doc.content.size
+    const nodes = [list, para("the paragraph after the tall table")].map((n) => view.state.schema.nodeFromJSON(n))
+    view.dispatch(view.state.tr.insert(at, nodes))
+    return at
+  })
+  await sleep(600)
+  const tall = await page.evaluate((at) => {
+    const { view, layout, geometry } = window.__pager
+    let tablePos = -1
+    view.state.doc.nodesBetween(at, view.state.doc.content.size, (n, pos) => {
+      if (tablePos < 0 && n.type.name === "table") tablePos = pos
+    })
+    const table = view.state.doc.nodeAt(tablePos)
+    const end = tablePos + table.nodeSize
+    const inside = layout.breaks.filter((b) => b.pos > tablePos && b.pos < end)
+    const pmTop = view.dom.getBoundingClientRect().top
+    const pageOf = (y) => layout.pages.findLastIndex((pg) => pg.start <= y + 0.5)
+    const rows = [...view.nodeDOM(tablePos).querySelectorAll("tr:not(.page-gap)")].map((tr) => {
+      const r = tr.getBoundingClientRect()
+      const top = r.top - pmTop
+      const bottom = r.bottom - pmTop
+      const pg = layout.pages[pageOf(top)]
+      return { top, bottom, fits: bottom <= pg.start + geometry.contentH + 0.5 }
+    })
+    const gaps = inside.map((b) => {
+      const gap = [...view.dom.querySelectorAll(".page-gap")].find((g) => g.dataset.page === String(layout.breaks.indexOf(b)))
+      return { tag: gap?.tagName, inTable: !!gap?.closest("table") }
+    })
+    return {
+      contentH: geometry.contentH,
+      height: table.content.size && view.nodeDOM(tablePos).getBoundingClientRect().height,
+      inside: inside.length,
+      gaps,
+      rowsOutside: rows.filter((r) => !r.fits).length,
+      maxFill: Math.max(...layout.pages.map((pg) => pg.fill)),
+    }
+  }, at)
+  ok(tall.height > tall.contentH, "the table is taller than a page", `height ${tall.height} contentH ${tall.contentH}`)
+  ok(tall.inside >= 2 && tall.gaps.every((g) => g.tag === "TR" && g.inTable), "it breaks between its rows, the gaps table rows inside it", JSON.stringify(tall))
+  ok(tall.rowsOutside === 0, "every row lies within its page", `${tall.rowsOutside} rows past their page's content bottom`)
+  ok(tall.maxFill <= tall.contentH, "no page overflows", `max fill ${tall.maxFill}`)
+  await checkLanding("tall table: ")
+  const live = await breaksNow()
+  await page.evaluate(() => document.querySelector(".panel-buttons button").click())
+  await sleep(500)
+  ok(JSON.stringify(live) === JSON.stringify(await breaksNow()), "with a tall table, the layout matches a full re-run")
+  await page.evaluate((at) => {
+    const { view } = window.__pager
+    view.dispatch(view.state.tr.delete(at, view.state.doc.content.size))
+  }, at)
+  await sleep(600)
+  ok(JSON.stringify(await breaksNow()) === JSON.stringify(before), "removing it restores the breaks")
+}
+
 console.log("— doc.toJSON() carries no page nodes")
 const docDumped = await page.evaluate(() => {
   ;[...document.querySelectorAll(".panel-buttons button")][1].click()

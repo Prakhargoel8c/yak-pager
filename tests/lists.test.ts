@@ -105,15 +105,14 @@ describe("list units", () => {
     expect(units(nested).every((u) => u.kind === "splittable")).toBe(true)
   })
 
-  it("a table inside an item moves whole", () => {
+  it("a table inside an item is placed row by row, at the item's inset", () => {
     const t = schema.nodes.table.create(null, [
       schema.nodes.tableRow.create(null, [schema.nodes.tableCell.create(null, p("a"))]),
       schema.nodes.tableRow.create(null, [schema.nodes.tableCell.create(null, p("b"))]),
     ])
     const u = units(doc.create(null, [ul(li(p("x"), t))]))
-    expect(u.map((x) => x.node.type.name)).toEqual(["paragraph", "table"])
-    expect(u[1].row).toBeUndefined()
-    expect(u[1].inset).toBe(24)
+    expect(u.map((x) => x.node.type.name)).toEqual(["paragraph", "tableRow", "tableRow"])
+    expect(u.slice(1).every((x) => x.row?.table === t && x.inset === 24)).toBe(true)
   })
 
   it("breakSite counts the lists around a position", () => {
